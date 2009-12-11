@@ -1,0 +1,14 @@
+Source: zbuild
+Priority: extra
+Maintainer: Jonas Christian Drewsen <jdrewsen@gmail.com>
+Build-Depends: python (>=2.4.4)
+Standards-Version: 3.7.2
+Section: extra
+
+Package: zbuild
+Section: extra
+Architecture: all
+Depends: python (>=2.4.4.), python-simplejson (>=1.9), aufs-modules-2.6-amd64
+Description: zbuild build automation and jails
+ Utilities for automating builds and for working with multiple
+ versions of a project in jails.

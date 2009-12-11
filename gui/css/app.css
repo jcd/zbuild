@@ -1,0 +1,90 @@
+/*
+  =CONTROLS
+  =APPLICATION
+  =HEADER
+  =CONTENT
+  =FOOTER
+*/
+ 
+ 
+/* =CONTROLS
+********************************************************************************************/
+h1 { font-size: 18px; text-shadow: #222 2px 2px 2px; margin-left: 20px; font-family: NeoSans, Arial; font-weight: 100; position: absolute; top: 35px; left: 12px; }
+h2 { font-size: 14px; font-weight: normal; }
+ 
+/* =APPLICATION
+********************************************************************************************/
+body { font-family: Arial; color: #fff; font-size: 12px; }
+.loadingBox{ background: #fff000; background: -webkit-gradient(linear, left top, left bottom, from(#fff000), to(#ffc000), color-stop(0.5, #fff000)); color: #000; padding: 5px 10px; position: absolute; top: 72px; z-index: 100; -webkit-border-radius: 6px; -moz-border-radius: 6px; left: 50%; margin-left: -70px; width: 70px; text-align: center; }
+ 
+/* =HEADER
+********************************************************************************************/
+#topBox { background: #000; padding: 8px 30px; text-align: right; position: relative; color: #aaa;}
+#topBox a{ color: #fff; }
+#userLabel { margin-right: 10px; }
+#signoutLabel { margin-left: 10px; }
+ 
+.navTabs{ position: absolute; left: 30px; top: 65px; right: 30px; }
+.w-tab{ -webkit-border-top-left-radius: 6px; -moz-border-radius-topleft: 6px; -webkit-border-top-right-radius: 6px; -moz-border-radius-topright: 6px; background: -webkit-gradient(linear, left top, left bottom, from(#626262), to(#464646), color-stop(0.5, #626262)); border-top: 1px solid #777; }
+.w-tab-selected{ background: #f4eddc; background: -webkit-gradient(linear, left top, left bottom, from(#f7fbfd), to(#f4eddc), color-stop(0.5, #f4eddc)); border-top: 1px solid #fff; text-shadow: #fff 1px 1px 1px;}
+.tab-settings{ position: absolute; right: 0px; }
+
+#logoDesc { font-size: 12px; font-weight: normal; color: #555; }
+ 
+/* =CONTENT
+********************************************************************************************/
+#contentArea{ position: absolute; top: 100px; bottom: 20px; left: 20px; right: 20px; }
+ 
+.contentNavBox{ -webkit-border-top-left-radius: 6px; -moz-border-radius-topleft: 6px; -webkit-border-top-right-radius: 6px; -moz-border-radius-topright: 6px; background: #f4eddc; border-bottom: 1px solid #e9d9b9; color: #000; padding: 10px; overflow: hidden; }
+.contentNavBox a{ color: #000; margin-right: 10px; }
+ 
+.contentBox{ padding: 20px; background: #fff; color: #000; -webkit-border-bottom-left-radius: 6px; -moz-border-radius-bottomleft: 6px; -webkit-border-bottom-right-radius: 6px; -moz-border-radius-bottomright: 6px; -webkit-box-shadow: 0px 3px 5px #222; overflow: hidden; padding-bottom: 40px; }
+ 
+/* =FOOTER
+********************************************************************************************/
+ 
+/*
+-moz-border-radius-topleft / -webkit-border-top-left-radius
+-moz-border-radius-topright / -webkit-border-top-right-radius
+-moz-border-radius-bottomleft / -webkit-border-bottom-left-radius
+-moz-border-radius-bottomright / -webkit-border-bottom-right-radius
+*/
+
+/* Application specific styles */
+
+/*
+.headerBox { background: #fff; color: #000; margin: 20px; padding: 8px; -moz-border-radius: 5px; -webkit-border-radius: 5px; }
+.logoText { font-size: 24px; font-weight: bold; color: #4466EE; margin-right: 30px; }
+.menuActions { font-size: 12px; color: #4466EE; padding: 8px;}
+*/
+/*
+.contentBox { background: #fff; color: #000; margin: 20px; padding: 30px; -moz-border-radius: 5px; -webkit-border-radius: 5px; text-align: center; } */
+
+/* #content { height: 600px; }*/
+/*
+/*
+
+#packagesList { text-align: left; padding: 1px; }
+#packagesList input { width: 6em; }
+
+
+*/
+
+#stageBox { text-align: left; margin-right: 20px;  float: left; padding-top: 10px; }
+
+.colhead { font-size: 20px; padding-bottom: 8px; }
+#stageSelect { min-width: 10em; }
+
+#packagesBox { text-align: left; float: left; padding-top: 10px; }
+#packagesListBox { text-align: left; float: left; }
+
+.packageName { width: 14em; }
+#packagesList input[type="text"] { width: 5em; height: 1.0em; font-size: 0.8em; font-family: helvetica; border: 0px;}
+#packagesList td { padding-top: 0px; padding-bottom: 0px; }
+
+.actionButton { float: left; clear: left; 
+font-weight: bold;
+-webkit-border-top-left-radius: 6px; -moz-border-radius-topleft: 6px; -webkit-border-top-right-radius: 6px; -moz-border-radius-topright: 6px; background: #f4eddc; background: -webkit-gradient(linear, left top, left bottom, from(#f2e0e0), to(#e9d9b9), color-stop(0.5, #e9d9b9)); border-top: 1px solid #AAA; padding: 10px; text-shadow: #fff 1px 1px 1px;
+-webkit-border-bottom-left-radius: 6px; -moz-border-radius-bottomleft: 6px;
+-webkit-border-bottom-right-radius: 6px; -moz-border-radius-bottomright: 6px;
+}

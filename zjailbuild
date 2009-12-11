@@ -1,0 +1,123 @@
+#!/bin/bash
+#
+# Stages a build in a jail 
+#
+# zjailbuild [-R svn-revision ] 
+#
+
+STAGE=
+BRANCH="trunk"
+REV="HEAD"
+VERBOSE=
+JAILHOME=/zjail/$USER
+
+usage() {
+    echo "$0 [-v] [-i jail-ip] [-h jail-hostname] [ -R svn rev] <command> [stage idx/name]"
+    echo "    -h jail-hostname is the hostname to put into the jail /etc/hostname"
+    echo "    -i jail-ip is an ip address to ensure that is listened on"
+    echo "    -R svn revision to build"
+    echo ""
+    echo "commands:"
+    echo "         list           - list available stages you can build"
+    echo "         list <stage>   - list packages build in given stage"
+    echo "         list-jails     - list current jailed builds"
+    echo "         status <stage> - show status of a given jailed build."
+    echo "         enter <stage>  - enter a jail of a build and starts a command prompt"
+    echo "         build <stage>  - build a stage"
+    echo "         rm <stage>     - destroy a jailed build to free resources"
+    echo ""
+    echo "         status, enter and build all need an extra stage name/idx parameter"
+}
+
+while getopts "d:h:i:c:f:vTs" OPT 
+do
+  case $OPT in
+      # w ) CMD=$OPTARG; FILENAME="PIMSLogList.txt"; TARGET="logfiles"; ;;
+      d ) JAILHOME=$OPTARG ;;
+      h ) JAILHOSTNAME=$OPTARG ; JAILHOSTNAME_CL=$OPTARG ;;
+      i ) JAILIP=$OPTARG ; JAILIP_CL=$OPTARG;;
+      v ) VERBOSE="-v" ;;
+      R ) REV=$OPTARG ;;
+      ? ) usage; exit 0 ;;
+      * ) echo "Invalid option '$OPT'"; usage; exit -1 ;;
+  esac
+done
+shift $(($OPTIND - 1)) 
+
+if [ -e "/etc/zjail" ]; then
+    echo "Already in jail. Use zbuild -n instead of zjailbuild or exit current jail first."
+    exit -1
+fi
+
+if [ $# -lt 1 ]; then
+    echo "Missing command"
+    usage;
+    exit -1
+fi
+
+CMD=$1
+
+if [ "$CMD" = "list-jails" ]; then
+    ./zjail $VERBOSE  list | sed -ne 's/^[[:blank:]]\+\([^_]\+\)_\([^_]\+\)_\([^_]\+\)$/Branch : \1, Rev: \2, Stage: \3/ p'
+    exit 0
+
+elif [ \( "$CMD" = "list" \) -a $# -lt 2 ]; then
+    ./zbuild list
+    exit 0
+
+elif [ \( "$CMD" = "status" \) -a $# -lt 2 ]; then
+    ./zjail $VERBOSE  list | sed -ne 's/^[[:blank:]]\+\([^_]\+\)_\([^_]\+\)_\([^_]\+\)$/\1 \2 \3/ p' | while read B R S ; do
+	ST=`./zjailbuild status ${S} | tail -n1`
+	echo "Jail:"
+	echo "      Branch   : $B"
+	echo "      Revision : $R"
+	echo "      Stage    : $S"
+	echo "      Status   : $ST"
+    done
+    exit 0
+fi
+
+if [ $# -lt 2 ]; then
+    echo "Missing stage name or index to build"
+    usage;
+    exit -1
+fi
+
+STAGE=$2
+JAILNAME=${BRANCH}_${REV}_${STAGE}
+
+shift
+shift
+
+if [ "$CMD" = "build" ]; then
+
+    ./zjail -n ${JAILNAME} $VERBOSE -c "if /bin/true ; then ./zbuild -R $REV build $STAGE >zjailbuild.log 2>&1 & fi ; exit"
+
+
+elif [ "$CMD" = "enter" ]; then
+    
+    ./zjail -n ${JAILNAME} $VERBOSE 
+
+
+elif [ "$CMD" = "status" ]; then
+    
+    if [ ! -e ${JAILHOME}/${JAILNAME} ]; then
+	echo "No-existing build ${JAILHOME}/${JAILNAME}"
+	exit -1
+    fi
+    echo "Jailed in ${JAILHOME}/${JAILNAME}"
+    ./zjail -n ${JAILNAME} $VERBOSE -c "./zbuild status ; exit"
+
+elif [ "$CMD" = "rm" ]; then
+    
+    if [ ! -e ${JAILHOME}/${JAILNAME} ]; then
+	echo "No-existing build ${JAILHOME}/${JAILNAME}"
+	exit -1
+    fi
+    ./zjail -n ${JAILNAME} $VERBOSE -T
+
+elif [ "$CMD" = "list" ]; then
+    
+    ./zbuild list $STAGE
+
+fi

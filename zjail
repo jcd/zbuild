@@ -1,0 +1,313 @@
+#!/bin/bash
+#
+# Setup a jailed environment
+#
+
+usage() {
+    echo "$0 [-d jail-dir] [-h jail-hostname] [-i jail-ip] [-f jail-run-file] [-c jail-command] [-v] [-T]"
+    echo "    -d jail-dir is where to build the jail"
+    echo "    -n jail-name is to name a jail. default is '1'"
+    echo "    -h jail-hostname is the hostname to put into the jail /etc/hostname"
+    echo "    -i jail-ip is an ip address to ensure that is listened on"
+    echo "    -f jail-run-file is the initial file to execute when entering jail"
+    echo "    -c jail-command is the initial command to run when entering jail"
+    echo "    -v verbose mode"
+    echo "    -T teardown the jail instead of creating/re-entering it."
+    echo "    -y skip acknowledgement on actions"
+    echo ""
+    echo "When leaving a jail you get the option to tear it down."
+    echo "When not tearing it down you can re-enter it by using the"
+    echo "-d flag to specify the path of the jail."
+}
+
+SCRIPTNAME=$0
+JAILCMDFILE=
+JAILCMD=
+JAILNAME="1"
+VERBOSE=
+TEARDOWN=
+FORCE=
+
+show_info() {
+
+    if [ -z "$JAILHOME" ] ; then
+	echo "Status        : not in jail"
+    else
+	echo "Status        : jailed"
+	echo "Jail home     : $JAILHOME"
+	if [ -z "$JAILIP" ]; then
+	    echo "Jail IP       : using base systems"
+	else
+	    echo "Jail IP       : $JAILIP"
+	fi
+	if [ -z "$JAILHOSTNAME" ]; then
+	    echo "Jail Hostname : using base systems"
+	else
+	    echo "Jail Hostname : $JAILHOSTNAME"
+	fi
+    fi
+}
+
+while getopts "d:h:i:c:f:n:vTsy" OPT 
+do
+  case $OPT in
+      # w ) CMD=$OPTARG; FILENAME="PIMSLogList.txt"; TARGET="logfiles"; ;;
+      d ) JAILHOME=$OPTARG ;;
+      h ) JAILHOSTNAME=$OPTARG ; JAILHOSTNAME_CL=$OPTARG ;;
+      i ) JAILIP=$OPTARG ; JAILIP_CL=$OPTARG;;
+      f ) JAILCMDFILE=$OPTARG ;;
+      c ) JAILCMD=$OPTARG ;;
+      n ) JAILNAME=$OPTARG ;;
+      v ) VERBOSE=1 ;;
+      T ) TEARDOWN=1 ;;
+      s ) show_info ; exit 0 ;;
+      y ) FORCE=1 ;;
+      ? ) usage; exit 0 ;;
+      * ) echo "Invalid option '$OPT'"; usage; exit -1 ;;
+  esac
+done
+shift $(($OPTIND - 1)) 
+
+
+if [ -e "/etc/zjail" ]; then
+    echo "Cannot goto jail when already in a jail. Exit current jail first."
+    exit -1
+fi
+
+if [ -z "$USER" ]; then
+    echo "Please set USER environment variable"
+    exit -1
+fi
+
+if [ -z "$JAILHOME" ] ; then
+    if [ -z "$USER" ] ; then
+	echo "Must set jail-dir with -d or set $USER environment variable"
+	exit -1;
+    fi
+    JAILHOME=/zjail/${USER}/${JAILNAME}
+    JAILHOME_ROOT=/zjail/${USER}
+else
+    JAILHOME=${JAILHOME}/${JAILNAME}
+    JAILHOME_ROOT=${JAILHOME}
+fi
+
+if [ "$1" = "list" ]; then
+    JD=`ls -1 $JAILHOME_ROOT`
+    if [ \( -e $JAILHOME_ROOT \) -a \( "$JD" != "" \) ]; then
+	echo "Jail name:"
+	ls -1 "$JAILHOME_ROOT" | while read T; do echo "           $T"; done
+    else
+	echo "No active jail(s)"
+    fi
+    exit 0
+fi
+
+if [ ! -e "$JAILHOME" ] ; then
+    sudo mkdir -p "$JAILHOME"
+fi
+
+JAILHOME=`readlink -f $JAILHOME`
+
+REENTERING=`mount | grep "$JAILHOME"`
+if [ -z "$REENTERING" ] ; then
+    if [ -z "$FORCE" ]; then
+	echo "Using jail home as '$JAILHOME' ( ctrl-c and use -? for help )"
+	echo "Do you want to create a new jail in '$JAILHOME' (y/N)?"
+	read SEL 
+	if [ \( "$SEL" != "y" \) -a \( "$SEL" != "Y" \) ] ; then echo "Aborting as requested."; exit 0 ; fi
+    fi
+fi
+
+linkfiles() {
+
+    # Use bind for common directories that are not written
+    # to
+
+    DIRS="bin dev emul lib lib32 lib64 opt proc sbin sys"
+    for i in $DIRS ; do
+	if [ ! -z "$VERBOSE" ] ; then echo "Binding /$i $JAILHOME/$i"; fi
+	sudo mkdir -p $JAILHOME/$i
+	sudo mount -o bind /$i $JAILHOME/$i
+    done
+
+    # Use a unionfs for "overriding" already installed packages
+    # without deleting them from base system
+
+    DIRS="etc usr var tmp root home"
+    for i in $DIRS ; do
+	RW=${JAILHOME}/unionfs/$i
+	RO=/$i
+	sudo mkdir -p $RW
+	sudo mkdir -p ${JAILHOME}/$i
+	if [ ! -z "$VERBOSE" ] ; then echo "Unionfs rw=$RW ro=$RO to $JAILHOME/$i"; fi
+	if [ "$i" = "tmp" ] ; then sudo chmod a+rwx $RW; fi
+	if [ "$i" = "var" ] ; then sudo chmod a+rwx $RW; fi
+	sudo mount -t aufs -o br=${RW}=rw:${RO}=ro none ${JAILHOME}/$i
+    done
+
+}
+
+unlinkfiles() {
+    #
+    # Get the bound dirs and unlink after asking if it is ok
+    #
+
+    if [ ! -z "$VERBOSE" ] ; then echo "Unmounting:"; fi
+    mount | grep "$JAILHOME" | cut -d' ' -f 3 | while read i ; do
+	if [ ! -z "$VERBOSE" ] ; then echo "$i"; fi
+	if ! sudo umount "$i" ; then
+	    echo "Error umounting $i -> aborting"
+	    exit -1
+	fi
+    done
+
+    return 0;
+}
+
+changesetup() {
+
+    # Set hostname and ip and make sure that eth0 is listening on that
+    # ip
+    
+    sudo mkdir -p "$JAILHOME/etc/zjail"
+
+    if [ ! -z "$JAILHOSTNAME" ] ; then
+	sudo /bin/bash -c "echo '$JAILHOSTNAME' > $JAILHOME/etc/hostname"
+	if [ ! -z "$VERBOSE" ] ; then echo "Changed jail hostname to $JAILHOSTNAME"; fi
+	sudo /bin/bash -c "echo '$JAILHOSTNAME' > $JAILHOME/etc/zjail/hostname"
+    fi
+
+    if [ ! -z "$JAILIP" ] ; then
+        # Check if we're already listening on the IP
+	TMP=`ip addr | sed -ne'/^...eth0/,/^[^ ]/ p' | grep $JAILIP`
+	if [ -z "$TMP" ]; then
+	    # Not listening... go listen
+	    sudo ip addr add $JAILIP/24 dev eth0
+	    if [ ! -z "$VERBOSE" ] ; then echo "Startet listening on $JAILIP"; fi
+	else
+	    if [ ! -z "$VERBOSE" ] ; then echo "Already listening on $JAILIP"; fi
+	fi
+	sudo /bin/bash -c "echo '$JAILIP' > $JAILHOME/etc/zjail/ip"
+    fi
+}
+
+go_to_jail() {
+
+    if [ ! -z "$VERBOSE" ] ; then 
+	echo "chroot to $JAILHOME and running $JAILCMD"
+    fi
+    if [ ! -z "$REENTERING" ] ; then
+	JAILIP=
+	if [ -e "$JAILHOME/etc/zjail/ip" ]; then
+	    JAILIP=`cat "$JAILHOME/etc/zjail/ip"`
+	fi
+	JAILHOSTNAME=
+	if [ -e "$JAILHOME/etc/zjail/hostname" ]; then
+	    JAILHOSTNAME=`cat "$JAILHOME/etc/zjail/hostname"`
+	fi
+    fi
+    
+FI=`cat <<EOF
+  if [ -f /etc/bash.bashrh ]; then . /etc/bash.bashrc; fi
+  if [ -f ~/.bashrh ]; then . ~/.bashrc; fi
+  export JAILIP=$JAILIP
+  export JAILHOME=$JAILHOME
+  export JAILHOSTNAME=$JAILHOSTNAME
+  $JAILCMD
+EOF`
+
+TMPFILE=`tempfile`
+TMPFILEABS="${JAILHOME}/${TMPFILE}"
+echo "$FI" > $TMPFILEABS
+
+    if [ ! -z "$JAILCMDFILE" ] ; then
+	echo ". $JAILCMDFILE" >> $TMPFILEABS
+    fi 
+    #screen -R -D sudo chroot $JAILHOME /bin/su -c "cd '$PWD'; /bin/bash --init-file $TMPFILE -i" $USER
+    sudo chroot $JAILHOME /bin/su -c "cd '$PWD'; /bin/bash --init-file $TMPFILE -i" $USER
+}
+
+setup_home() {
+    sudo mkdir -p $JAILHOME
+}
+
+teardown_home() {
+    if [ -z "$JAILHOME" ]; then
+	echo "No tearing down because jail home is '' (empty)"
+	exit -1
+    fi
+
+    sudo rm -rf "$JAILHOME/unionfs"
+    sudo rm -rf "$JAILHOME/etc/zjail"
+
+    ls -1 "$JAILHOME/" | while read D ; do
+	RMD="${JAILHOME}/${D}"
+	if ! sudo rmdir $RMD ; then
+	    echo "Error removing dir $RMD -> aborting"
+	    exit -1
+	fi
+    done
+
+    if ! sudo rmdir "$JAILHOME" ; then
+	echo "Error removing dir $JAILHOME -> aborting"
+	exit -1
+    fi
+}
+
+setup() {
+
+    if [ ! -z "$REENTERING" ] ; then
+	echo "Jail already exist -> re-entering"
+	if [ ! -z "$JAILHOSTNAME_CL" ]; then 
+	    echo "Ignoring command line jail hostname (only allowed on jail creation)"
+	fi
+	if [ ! -z "$JAILIP_CL" ]; then 
+	    echo "Ignoring command line jail IP (only allowed on jail creation)"
+	fi
+	return 0
+    fi
+
+    setup_home
+    linkfiles 
+    changesetup
+}
+
+teardown() {
+    unlinkfiles
+    teardown_home
+}
+
+if [ ! -z "$TEARDOWN" ] ; then
+    if [ -z "$FORCE" ]; then
+	echo "Really teardown jail $JAILHOME (y/N)?"
+	read SEL
+	if [ \( "$SEL" != "y" \) -a \( "$SEL" != "Y" \) ] ; then exit 0; fi
+    fi
+    echo "Tearing down jail $JAILHOME"
+    teardown
+    exit 0
+fi
+
+setup
+go_to_jail
+
+exit 0
+
+if [ -z "$FORCE" ]; then
+    echo "Should I teardown jail in $JAILHOME (y/N)?"
+    if [ ! -z "$VERBOSE" ] ; then 
+	mount | grep "$JAILHOME" | cut -d' ' -f 3 | while read i ; do
+	    echo $i
+	done
+	echo "Really (y/N)?"
+    fi
+    read SEL
+    if [ \( "$SEL" != "y" \) -a \( "$SEL" != "Y" \) ] ; then 
+	echo "Not tearing down jail."
+	echo "Run '$SCRIPTNAME -d $JAILHOME' to re-enter jail."; 
+	echo "Run '$SCRIPTNAME -T -d $JAILHOME' to tear down jail."; 
+	exit 0 ; 
+    fi
+fi
+
+teardown

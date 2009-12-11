@@ -1,0 +1,54 @@
+#!/bin/bash
+#
+# Forward a connection from one ip:port on this host to another 
+# ip:port on this host
+#
+
+CREATEORDROP=$1
+DEST_IP=$2
+DEST_PORT=$3
+MAIN_IP=10.10.6.4
+
+usage() {
+    echo "usage: $0 -c <from ip> <port>"
+    echo "       $0 -r <from ip> <port>"
+    echo ""
+    echo "       redirect traffic to <from ip> and <port>"
+    echo "       to main ip and port."
+    echo "       -c create a redirection"
+    echo "       -r remove a redirection"
+}
+
+if [ -z "$CREATEORDROP" ]; then
+    usage
+    exit -1
+fi
+
+if [ "$CREATEORDROP" = "-l" ]; then
+    sudo /sbin/iptables -t nat -L | grep "DNAT" | awk "{print \"Forwarding \" \$5 \" \" \$7 \" to ${MAIN_IP}\" }"
+    exit 0
+fi
+
+if [ -z "$DEST_IP" ]; then
+    usage
+    exit -1
+fi
+
+if [ -z "$DEST_PORT" ]; then
+    usage
+    exit -1
+fi
+
+if [ "$CREATEORDROP" = "-c" ]; then
+   sudo  /sbin/iptables -t nat -A OUTPUT -p tcp -d $DEST_IP/32 --dport $DEST_PORT -j DNAT --to-destination ${MAIN_IP}:${DEST_PORT}
+elif [ "$CREATEORDROP" = "-r" ]; then
+    TST="0"
+    while [ "$TST" = "0" ] ; do
+	sudo /sbin/iptables -t nat -D OUTPUT -p tcp -d $DEST_IP/32 --dport $DEST_PORT -j DNAT --to-destination ${MAIN_IP}:${DEST_PORT} 2>/dev/null
+	TST="$?"
+    done
+else
+    echo "ERROR: Unknown option $1"
+    usage
+    exit -1
+fi

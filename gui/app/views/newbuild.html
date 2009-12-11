@@ -1,0 +1,9 @@
+<div class="colhead">Stages</div>
+<div id="stageBox">
+  <%= W.UI.Select.build( {id : "stageSelect", size : 8} ) %>
+</div>
+<div id="packagesBox">
+    <%= W.UI.Table.build({id: "packagesList",
+	 	     thead: ['package name', 'version', 'revision', 'branch', 'build']}) %>
+</div>
+<%= W.UI.Link("Create", { classes: "actionButton", click: contr.onNewBuild }) %>

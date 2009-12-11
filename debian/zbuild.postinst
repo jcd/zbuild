@@ -1,0 +1,4 @@
+#!/bin/sh
+
+ln -sf /usr/share/zbuild/zbuild /usr/bin/zbuild
+ln -sf /usr/share/zbuild/zjail /usr/bin/zjail
