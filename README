@@ -1,0 +1,75 @@
+Software Build Automation
+=========================
+
+deps: debhelper svn git fakeroot 
+
+ZJAILBUILD
+----------
+
+zjailbuild is a combination of zbuild and zjail (described below).
+Using this script to stage a given build in a jail.
+
+All commands accepts a -h option for displaying help.
+
+ZBUILD
+------
+
+This script will run all scripts in sub directory 'stages/xxx' in
+lexicographically order including recursion to subdirs. xxx is the
+stages selected from command line arg 1:
+
+zbuild build mystage
+
+will run stages in 'stages/mystage'
+
+The my stage directory contain symlinks into the packages
+directory and are run in lexicographically order.
+
+A shortcut to use this on a remote host is to use an alias in
+your .bashrc file:
+
+alias zbuild="ssh <builduser@buildhost> ./zbuild/zbuild"
+
+
+ZJAIL
+-----
+
+This script is a simple shell script that when executed will
+put your current session into a jail. Everything done in 
+jail works just as if you were on the base system but 
+changes made will not be made to the base system but
+in the jail only. 
+
+This means that you can test package installation etc. 
+without affecting the base system. 
+
+A optional ip and hostname can be provided in order
+for the jail to use that.
+
+NOTICE: the system root directories 
+	bin dev emul lib lib32 lib64 opt proc sbin sys
+	are shared between all jail and the base 	
+	system and should not be changed from 
+	within a jail (only read).
+
+
+
+ZSERVICEFORWARD
+---------------
+
+Forwards traffic to a local IP:PORT to the base system local IP and
+same port. Usefull for using some of the base systems services on the
+jail ip. 
+
+
+
+TODO
+----
+
+* Figure out a way to make the build ordered from web ui 
+  automatically get clean up since they are 
+  build i separate directories in order to be able
+  to do simultanous builds.
+  The directories may very well be named by the build ID 
+  in the database.
+
