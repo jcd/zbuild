@@ -123,12 +123,22 @@ linkfiles() {
     # Use bind for common directories that are not written
     # to
 
-    DIRS="bin dev emul lib lib32 lib64 opt proc sbin sys"
+    DIRS="bin emul lib lib32 lib64 opt proc sbin sys"
     for i in $DIRS ; do
 	if [ ! -z "$VERBOSE" ] ; then echo "Binding /$i $JAILHOME/$i"; fi
 	sudo mkdir -p $JAILHOME/$i
-	sudo mount -o bind /$i $JAILHOME/$i
+	sudo mount --bind /$i $JAILHOME/$i
     done
+
+    # dev has submounts
+    if [ ! -z "$VERBOSE" ] ; then echo "Binding /dev $JAILHOME/dev recursively"; fi
+    sudo mkdir -p $JAILHOME/dev
+    sudo mount --rbind /dev $JAILHOME/dev
+
+    # tmpfs is a submount
+    #if [ ! -z "$VERBOSE" ] ; then echo "Binding / $JAILHOME/dev recursively"; fi
+    #sudo mkdir -p $JAILHOME/dev
+    #sudo mount --bind /dev $JAILHOME/dev
 
     # Use a unionfs for "overriding" already installed packages
     # without deleting them from base system
@@ -154,7 +164,24 @@ unlinkfiles() {
 
     if [ ! -z "$VERBOSE" ] ; then echo "Unmounting:"; fi
     mount | grep "$JAILHOME" | cut -d' ' -f 3 | while read i ; do
+
 	if [ ! -z "$VERBOSE" ] ; then echo "$i"; fi
+
+	echo "$i" | grep "/dev"
+
+	if [ "$?" = "0" ]; then
+	    # The dev mount need /dev/pts and /dev/shm submount
+	    # umounting first
+	    if ! sudo umount  "$i/pts" ; then
+		echo "Error umounting $i/pts -> aborting"
+		exit -1
+	    fi
+	    if ! sudo umount  "$i/shm" ; then
+		echo "Error umounting $i/shm -> aborting"
+		exit -1
+	    fi
+	fi
+
 	if ! sudo umount "$i" ; then
 	    echo "Error umounting $i -> aborting"
 	    exit -1

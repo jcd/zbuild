@@ -4,57 +4,24 @@
   Z-Build
   Software Build Automation Tool (C) 2009 - Jonas Drewsen
 
-  This script will run all scripts in sub directory 'stages/xxx' in
-  lexicographically order including recursion to subdirs. xxx is the
-  stages selected from command line arg 1:
+  Builds by executing scripts in a specified directory. The scripts
+  locations are imported into a sqlite database and buildsets can be
+  created containing a number of scripts.
 
-  run_build build mystage
-
-  will run stages in 'stages/mystage'
-
-  The my stage directory contain symlinks into the packages
-  directory and are run in lexicographically order.
+  Builds can be executed in the background and the build status can be
+  queried.
 """
 
 import sys
 import os
 import os.path
-from  datetime import datetime, timedelta
-import select
-import popen2
+from  datetime import datetime
 import lib.config as config
 from storm.locals import *
-import commands
-from lib import db,  server
+from lib import db, server, script_import, utils, building
+from lib.utils import dlog
 
-DEBUG=True
-
-
-# Debug logging to console
-log_indent = 0
-indent = "    "
-def dlog(msg, obj = None):
-    if DEBUG:
-        print (indent * log_indent) + msg
-    if obj:
-        obj.log += msg + u"\n"
-
-def lockPid():
-    """Get an exclusive lock when building"""
-    # If a running zbuild is present then abort
-    if os.path.exists(pidfile):
-        return False
-
-    # Run next scheduled build
-    global pid
-    pid = os.getpid()
-
-    # Create pidfile to signal that a build is in progress
-    runfile = open(pidfile, 'w')
-    runfile.write(str(pid))
-    runfile.flush()
-    runfile.close()
-    return True
+STORE = None
 
 def parse_commands(cmd,  args):
     """
@@ -63,149 +30,278 @@ def parse_commands(cmd,  args):
     argc = len(args)
 
     if command == 'build':
-        # Build the specified stage
+        # Build the specified buildset
+        if not initdb(False):
+            dlog("Error: database empty - use 'import' to populate")
+            return
         if argc < 2:
-            dlog("Usage: %s build <stage name/idx>" % (progname,))
-            dlog("\nAvailable stages:\n")
-            db.stage.dumpNames(store,  sys.stdout.write)
+            dlog("Usage: %s build <buildset name/idx>" % (progname,))
+            dlog("\nAvailable buildsets:\n")
+            db.buildset.dumpNames(STORE,  sys.stdout.write)
             return False
                     
-        if not lockPid():
+        if not utils.lockPid(PID_FILE):
             dlog("Pidfile already exists -> aborting")
             return False
         
-        stage = db.stage.getByIdent(store, unicode(args[1]))
-        build = db.build.createFromStage(stage)
-        run_build(build)
+        buildset = db.buildset.getByIdent(STORE, unicode(args[1]))
+        if not buildset:
+            print u"Error: No buildset called '%s'" % unicode(args[1])
+            # Clean up for next run
+            os.remove(PID_FILE)
+            return
+
+        print u'Using buildset "%s"' % buildset.name
+
+        build = db.build.createFromBuildset(buildset)
+        building.run_build(build, STORE)
         
         # Clean up for next run
-        os.remove(pidfile)
+        os.remove(PID_FILE)
 
-    elif command in ( "addpack", "rmpack" ):
-        # Add specified package to stage
+    elif command in ( "addscript", "rmscript" ):
+        # Add specified script to buildset
+
+        # allow creating the database if this is a addscript
+        if not initdb(False):
+            dlog("Error: database empty - use 'import' to populate")
+            return
+
         if argc < 3:
-            if command == "addpack":
-                dlog("Usage: %s addpack <stage name/idx> <package name/idx> [before name/idx]" % (progname,))
-                dlog("       if before idx is not provided, the package will be")
-                dlog("       inserted at end of stage")
+            if command == "addscript":
+                dlog("Usage: %s addscript <buildset name/idx> <script name/idx> [before name/idx]" % (progname,))
+                dlog("       if before idx is not provided, the script will be")
+                dlog("       inserted at end of buildset")
             else:
-                dlog("Usage: %s rmpack <stage name/idx> <package name/idx> | " % (progname,))
+                dlog("Usage: %s rmscript <buildset name/idx> <script name/idx>" % (progname,))
+            return False
+
+        buildset_ident = unicode(args[1])
+        buildset = db.buildset.getByIdent(STORE, buildset_ident)
+        idents = map(lambda a: a.strip(), unicode(args[2]).split(','))
+
+        for ident in idents:
+            pack_ident = unicode(ident)
+        
+            pack = db.script.getByIdent(STORE, pack_ident)
+            
+            if buildset is None and command == 'rmscript':
+                dlog("Error: No such buildset " + buildset_ident)
                 return False
             
-        stage_ident = unicode(args[1])
-        pack_ident = unicode(args[2])
-        stage = db.stage.getByIdent(store, stage_ident)
-        pack = db.package.getByIdent(store, pack_ident)
-        
-        if pack is None:
-            dlog("No such package " + pack_ident)
-            return False
-        
-        if stage is None:
-            dlog("No such stage " + args[1] + " -> Adding")
-            stage = db.stage()
-            stage.name = stage_ident
-            store.add(stage)
-            store.flush()
+            if pack is None:
+                dlog("Error: No such script " + pack_ident)
+                return False
             
-        if command == "addpack":
-            pack_idx = sys.maxint
-            if argc > 3:
-                before_pack = db.package.getByName(store,  unicode(args[3])) # before name
-                if before_pack:
-                    pack_idx = stage.getPackageIndex(before_pack)
-                else:
-                    pack_idx = int(args[3])
+            if buildset is None:
+                dlog("No such buildset " + args[1] + " -> Adding")
+                buildset = db.buildset()
+                buildset.name = buildset_ident
+                STORE.add(buildset)
+                STORE.flush()
+                
+            if command == "addscript":
+                pack_idx = sys.maxint
+                if argc > 3:
+                    before_pack = db.script.getByName(STORE,  unicode(args[3])) # before name
+                    if before_pack:
+                        pack_idx = buildset.getScriptIndex(before_pack)
+                    else:
+                        pack_idx = int(args[3])
 
-            stage.addPackage(pack,  pack_idx)
-        else:
-            try:
-                idx = int(pack_ident)
-            except:
-                idx = pack
-            stage.removePackage(idx)
-        store.commit()
+                scripts = pack.getLeafs()
+                for i in scripts:
+                    dlog("Adding script %s to buildset %s" % (i.name, buildset.name))
+                    buildset.addScript(i,  pack_idx)
+            else:
+                try:
+                    idx = int(pack_ident)
+                except:
+                    idx = pack
+                buildset.removeScript(idx)
+        STORE.commit()
         return True
         
     elif command == 'list':
+
+        if not initdb(False):
+            dlog("Error: database empty - use 'import' to populate")
+            return
 
         sub = ""
         if argc > 1:
             sub = args[1]
 
-        if sub in ('packs','stages',''):
-            if sub in ("packs",''):
+        if sub in ('scripts','buildsets',''):
+            if sub in ("scripts",''):
                 if sub == "":
-                    print "\nAvailable packages:\n"
-                db.package.dumpNames(store,  sys.stdout.write)
+                    print "sub commands for this command :"
+                    print "  buildsets  : to list available buildsets only"
+                    print "  scripts    : to list available scripts only"
+                    print "  <name/idx> : the name or index of a buildset to list "
+                    print "               scripts in that buildset"
+                    print "\nAvailable scripts:\n"
+                db.script.dumpNames(STORE,  sys.stdout.write)
 
-            if sub in ("stages", ''):
+            if sub in ("buildsets", ''):
                 if sub == "":
-                    print "\nAvailable stages:\n"
+                    print "\nAvailable buildsets:\n"
 
-                db.stage.dumpNames(store,  sys.stdout.write)
-                if sub == "":
-                    print "\nTo list packages in a specific stage:"
-                    print "  %s list <stage name/idx>" % (progname,)
+                db.buildset.dumpNames(STORE,  sys.stdout.write)
         else:
+            # A specific buildset has been specified. List that.
             if argc < 2:
-                dlog("Usage: %s list <stage name/idx>" % (progname,))
-                dlog("\nAvailable stages:\n")
-                db.stage.dumpNames(store,  sys.stdout.write)
+                dlog("Usage: %s list <buildset name/idx>" % (progname,))
+                dlog("\nAvailable buildsets:\n")
+                db.buildset.dumpNames(STORE,  sys.stdout.write)
                 return False
-            stage_ident = unicode(args[1])
-            stage = db.stage.getByIdent(store, stage_ident)
-            if not stage:
-                dlog("No such stage " + stage_ident)
+            buildset_ident = unicode(args[1])
+            buildset = db.buildset.getByIdent(STORE, buildset_ident)
+            if not buildset:
+                dlog("Error: No such buildset " + buildset_ident)
                 return False
                 
-            print "\nPackages executed in stage '" + stage.name + "':\n"
+            print "\nScripts executed in buildset '" + buildset.name + "':\n"
 
-            db.stage.dumpPackageNames(stage,  sys.stdout.write)
+            db.buildset.dumpScriptNames(buildset,  sys.stdout.write)
             
         #else:
-        #   dlog("Usage: %s list stages |" % (progname,))
-        #   dlog("       %s list packs " % (progname,))
-        #   dlog("       %s list stage <stage name/idx>" % (progname,))
+        #   dlog("Usage: %s list buildsets |" % (progname,))
+        #   dlog("       %s list scripts " % (progname,))
+        #   dlog("       %s list buildset <buildset name/idx>" % (progname,))
             
     elif command == 'status':
+
+        pid = None
         try:
-            pid = open(pidfile,'r').read()
+            pid = open(PID_FILE, 'r').read()
         except:
-            print "No build in progress"
-            return True
+            pass
+
+        if not initdb(False):
+            if pid:
+                dlog("Error: database empty!")
+            else:
+                dlog("No build results available")
+            return
+        
+        builds = STORE.find(db.build).order_by(Desc(db.build.id))
+        if not builds.count():
+            dlog("No builds available")
             
-        f = open(os.path.expanduser(options.work_dir) + "/" + pid, 'r')
+        for build in builds:
+            dlog("Buildset '%s'" % build.buildset.name)
+            indent = "   "
+            last_script = None
+
+            bs = STORE.find( db.build_script_status,
+                             db.build_script_status.build_id == build.id,
+                             db.buildset_script.id == db.build_script_status.buildset_script_id).order_by(Asc(db.buildset_script.idx))
+
+            for status in bs:
+                fmt = "%-15s : %-9s (%s of %s)"
+                script = status.buildset_script.script
+                start_time = status.start_time
+                end_time = status.end_time or datetime.utcnow()
+                dur = (not start_time) and "--:--" or utils.sec2str((end_time - start_time).seconds)
+                eta_dur = status.buildset_script.last_duration
+                eta_dur = eta_dur is not None and utils.sec2str(eta_dur) or "--:--"
+
+                # print parent scripts that was not parent for the
+                # last script
+                line, num = utils.render_tree_entry(script, last_script)
+                last_script = script
+
+                if status.end_time:
+                    status_str = (not status.exit_code and "Success" or 
+                                  str(status.exit_code))
+                else:
+                    status_str = status.start_time and "Running" or "  -"
+
+                dlog(line + fmt % ( script.name, status_str, dur, eta_dur ))
+
+            dur, eta_dur = build.getDurations()
+            dlog("-" * 50)
+            dlog("%-33s (%s of %s) " % ("Total duration", 
+                                  utils.sec2str(dur or 0), 
+                                  utils.sec2str(eta_dur or 0) 
+                                  ))
+            break
+        return
+
+        f = open(os.path.expanduser(OPTIONS.work_dir) + "/" + pid, 'r')
         timings = pickle.load(f)
 
-        stage = stages.stages[timings[None][1]]
+        buildset = buildsets.buildsets[timings[None][1]]
         now = datetime.utcnow()
         dur = now - timings[None][0]
-        print "Stage '" + stage.name + "' progress " + str(dur).split('.')[0] + " of " + str(stage.metadata.get('duration','n/a')).split('.')[0]
+        print "Buildset '" + buildset.name + "' progress " + str(dur).split('.')[0] + " of " + str(buildset.metadata.get('duration','n/a')).split('.')[0]
         del timings[None]
 
         keys = timings.keys()
         keys.sort()
 
         for pack in keys:
-            symlink = os.readlink("stages/" + stage.name + "/" + pack)
-            package = stages.get_package_by_stage_link(symlink)
-            dur = package.metadata.get('duration','n/a')
+            symlink = os.readlink("buildsets/" + buildset.name + "/" + pack)
+            script = buildsets.get_script_by_buildset_link(symlink)
+            dur = script.metadata.get('duration','n/a')
             cur_dur = timings[pack]
 
             if type(cur_dur) is datetime:
-                print "  Package '" + package.name + "' " + str(now - cur_dur).split('.')[0] + " of " + str(dur).split('.')[0]
+                print "  Script '" + script.name + "' " + str(now - cur_dur).split('.')[0] + " of " + str(dur).split('.')[0]
             else:
-                print "  Package '" + package.name + "' " + str(cur_dur).split('.')[0] + " done"
+                print "  Script '" + script.name + "' " + str(cur_dur).split('.')[0] + " done"
             
+    elif command == 'log':
+
+        pid = None
+        try:
+            pid = open(PID_FILE, 'r').read()
+        except:
+            pass
+
+        if not initdb(False):
+            if pid:
+                dlog("Error: database empty!")
+            else:
+                dlog("No build results available")
+            return
+        
+        builds = STORE.find(db.build).order_by(Desc(db.build.id))
+        if not builds.count():
+            dlog("No builds available")
+            
+        for build in builds:
+            dlog("Buildset '%s'" % build.buildset.name)
+            indent = "   "
+            last_script = None
+
+            bs = STORE.find( db.build_script_status,
+                             db.build_script_status.build_id == build.id,
+                             db.buildset_script.id == db.build_script_status.buildset_script_id).order_by(Asc(db.buildset_script.idx))
+
+            idx = 0
+            for status in bs:
+                if idx < OPTIONS.start_index and idx > OPTIONS.stop_index:
+                    idx += 1
+                    continue
+                script = status.buildset_script.script
+                dlog("-" * 70)
+                dlog("Log for '%s'" % script.name)
+                dlog(status.log)
+                dlog("-" * 70)
+                idx += 1
+                
+            break
+
     elif command == 'release':
         try:
-            pid = open(pidfile,'r').read()
+            pid = open(PID_FILE, 'r').read()
         except:
             # ok
             pass
         else:
-            print "Cannot release this stage since it is still building. Please hang on."
+            print "Cannot release this buildset since it is still building. Please hang on."
             sys.exit(1)
 
         # Make tags in the git/svn repos named from the release version. Possibly
@@ -213,7 +309,7 @@ def parse_commands(cmd,  args):
         
         
         # Upload "binaries" to public repos
-        p = options.released_debs_path
+        p = OPTIONS.released_debs_path
         
     elif command == 'buildinfo':
         versions_file = "versions"
@@ -221,7 +317,7 @@ def parse_commands(cmd,  args):
         if argc > 1:
             pack = args[1]
         else:
-            print "Need package name as argument"
+            print "Need script name as argument"
             sys.exit(1)
             
         if argc > 2:
@@ -242,19 +338,19 @@ def parse_commands(cmd,  args):
             sys.exit(1)
             
         scm = {}
-        for opt in config.options('scm'):
+        for opt in config.OPTIONS('scm'):
             scm[opt] = config.get('scm', opt)
 
-        if not config.has_section('packages'):
-            print "No [packages] section in versions config file"
+        if not config.has_section('scripts'):
+            print "No [scripts] section in versions config file"
             sys.exit(1)
 
-        if not config.has_option('packages', pack):
-            print "No package named '%s' in versions config file" % (pack,)
+        if not config.has_option('scripts', pack):
+            print "No script named '%s' in versions config file" % (pack,)
             sys.exit(1)
 
-        info = { 'repos' : '', 'repos_uri' : '', 'package' : pack, 'revision': 'HEAD', 'branch': ''}
-        pi = config.get('packages',pack)
+        info = { 'repos' : '', 'repos_uri' : '', 'script' : pack, 'revision': 'HEAD', 'branch': ''}
+        pi = config.get('scripts',pack)
         pi = pi.split(' ')
 
         if config.has_option('scm', pi[0]):
@@ -269,327 +365,77 @@ def parse_commands(cmd,  args):
         for i in info:
             print i + " " + info[i]
 
-    elif command == 'import-packages':
-
-        import_packages(store, options.packages)
+    elif command == 'import':
+        
+        what = argc > 1 and args[1]
+        path = argc > 2 and args[2]
+        if what != 'scripts' or path == False:
+            print "Need sub command:"
+            print "   scripts <dir> : Will import paths to all scripts "
+            print "                    in 'dir' recursively."
+            sys.exit(1)
+            
+        initdb()
+        script_import.import_scripts(path, STORE)
 
     elif command == 'server':
 
-        server.run(options.port,  store,  script_dir + "/wrenchapp")
+        initdb()
+        server.run(OPTIONS.port,  STORE,  SCRIPT_DIR + "/wrenchapp")
         
     else:
-        usage()
-
-
-def import_packages(store, path):
-    """
-    Import packages in path into database
-    """
-    parents = {}
-    def get_parent(ps,  name):
-        for i in ps:
-            if name[:len(i)] == i:
-                return ps[i]
-        return None
-        
-    res = commands.getoutput("find %s" % (path,))
-    res = res.split('\n')
-    idx = 0
-    len_path = len(path)
-    for f1 in res:
-        f = f1[len_path:]
-        if not f:
-            continue
-        full_f = f
-        f = f.split('/')[-1]
-        if f[0] in ['.', '#'] or f[-1] == '~':
-            # skip unwanted files
-            continue
-        # Skip package if it already exists
-        p = store.find(db.package, db.package.name == unicode(f)).one()
-        if  p:
-            parents[f] = p.id
-            print "Skipping %s because it is already present in build system" % f
-            continue
-        p = db.package()
-        p.name = unicode(f)
-        p.path = unicode(full_f)
-        p.parent_id = get_parent(parents,  f)
-        print "adding " + f
-        store.add(p)
-        is_parent = os.path.isdir(f1)
-        if is_parent:
-            store.flush()
-            print "is parent %i" % p.id
-            parents[f] = p.id
-    store.commit()
-
-def run_build(build):
-    """
-    Run any build specified in the database to be build.
-    
-    This is the main entry.
-    """
-
-    # Run packages in the stage in the context of the build settings
-    dlog("Starting build of stage " + build.stage.name)
-
-    # Make sure that the work dir is present
-    co_dir = os.path.expanduser(options.work_dir)
-    mkdirp(co_dir)
-
-    build.work_dir = unicode(co_dir)
-    build.start_time = datetime.utcnow()
-
-    store = Store.of(build)
-    store.commit()
- 
-    # Run all packages in this stage
-    index = 0
-
-    # Run script
-    logger = log_stdout()
-
-    build_packs = store.find(db.build_package,  db.build_package.build_id == build.id).order_by(Asc(db.build_package.idx)) 
-
-    for build_pack in build_packs:
-
-        build_pack.start_time = datetime.utcnow()
-        store.commit()
-
-        dlog("------------------------------------------------------------------")
-
-        if options.stop_index <= index:
-            dlog("Skipping rest of packages in stage as requested by set option", build_pack)
-            break
-
-        if options.start_index > index:
-            dlog("Skipping by until index " + str(options.start_index) + " (current step " + str(index) + ")",
-                 build_pack)
-            index += 1
-            continue
-
-        index += 1
-        def do_log(msg):
-            logger(msg)
-            build_pack.log += unicode(msg) + u'\n'
-
-        run_script(do_log, options.packages + os.sep + build_pack.stage_package.package.path)
-
-        build_pack.end_time = datetime.utcnow()
-        
-    build.end_time = datetime.utcnow()
-    store.commit()
-
-    #stage.updateMetadata(timings=timings)
-
-    #timings[None] = (stage.name, end_time - start_time)
-    
-    dlog("Build completed")
-
-def log_stdout():
-    """
-    Helper log function to return a function that can be used to log
-    to a build db entry
-    """
-    f = open('./build.log', 'w')
-    def do_log(msg):
-        sys.stdout.write(msg)
-        sys.stdout.flush()
-        f.write(msg)
-        f.flush()
-    return do_log
-
-
-def mkdirp(path):
-    """
-    Ensure that path of dirs exists
-    """
-    ps = path.split('/')
-    fpath = ""
-    for p in ps:
-        fpath += p + "/"
-        if not os.path.exists(fpath):
-            os.mkdir(fpath)
-        elif not os.path.isdir(fpath):
-            raise Exception("Cannot chdir '%s' because is it a file" % (fpath,))
-    
-
-def run_script(logger, path):
-    """
-    Run the script specified on path sending log status to logger.
-    """
-    SCRIPT_TIMEOUT=30*60  # seconds before the script times out
-    CHECK_INTERVALS=1.0    # second between each status check of script
-    
-    dlog("Running script " + path)
-    begin_time = datetime.utcnow()
-    
-    # When to kill the script because it has been running for too long
-    kill_time = begin_time + timedelta(seconds=SCRIPT_TIMEOUT)
-
-    init_bash = script_dir + "/lib/functions.sh"
-
-    inst = popen2.Popen3("/bin/bash %s '%s'" % (init_bash, path), True)
-    out, _in, err = inst.fromchild, inst.tochild, inst.childerr
-    
-    # Iterate until script is done or should be killed
-    dot_last = True
-
-    def do_logging(dot_last):
-        """
-        Read output from pipe and put to our logger
-        """
-        rlist, wlist, xlist = select.select([out,err], [], [], CHECK_INTERVALS)
-
-        # append output to log buffers
-        if len(rlist):
-            if dot_last:
-                logger("\n")
-            if out in rlist:
-                msg = os.read(out.fileno(), 1000)
-                if msg:
-                    logger(msg)
-            if err in rlist:
-                msg = os.read(err.fileno(), 1000)
-                #logger(msg)
-                if msg:
-                    msgs = msg.split('\n')
-                    msgs.reverse()
-                    msg = ""
-                    is_first = True
-                    for i in msgs:
-                        if i == '':
-                            if not is_first:
-                                msg += "ERROR: "
-                            else:
-                                continue
-                        msg += "ERROR : " + i + "\n"
-                        is_first = False
-                        
-                    logger(msg)
-            dot_last = False
-
-        if not (len(xlist) or len(xlist) or len(wlist)) and dot_last:
-            logger(".")
-            dot_last = True
-
-        return dot_last
-
-    while datetime.utcnow() < kill_time and inst.poll() < 0:
-        dot_last = do_logging(dot_last)
-
-    # Last chance logging in case of instant termination of proc
-    do_logging(dot_last)
-    
-    res = inst.poll()
-    
-    if res < 0:
-        # timed out. kill process.
-        del inst
-        dlog("Script timed out " + path)
-    elif res > 0:
-        dlog("Script exited with code " + str(res))
-
-    return res
+        print help_epilog(True)
 
 
 def usage():
     """
-    Display usage
+    Return simple usage string
+    """
+    return "%prog [options] <command> ..."
+
+def help_epilog(include_usage=False):
+    """
+    Return usage help epilog
     """
     out = ""
+    if include_usage:
+        out += usage().replace('%prog', os.path.basename(sys.argv[0])) + "\n"
     out += "\n"
-    out += "A stage consists of a sequence of packages that will be\n"
-    out += "executed when the stage is build\n"
+    out += "A buildset consists of a sequence of scripts that will be\n"
+    out += "executed when the buildset is build\n"
     out += "\n"
-    out += "commands ( -h for more help ): \n"
 
-    commands = { '1list'    : 'list stages or packages',
-                 '2build'   : 'build a specified stage',
+    if include_usage:
+        out += "commands ( -h for more help ): \n"
+
+    commands = { '1list'    : 'list buildsets or scripts',
+                 '2build'   : 'build a specified buildset',
                  '3status'  : 'status of running build if any',
-                 '4addpack' : 'add a package to a stage',
-                 '5rmpack'  : 'remove a package from a stage',
-                 '6release' : 'release packages from a given stage',
-                 '7import-packages' : 'import packages to be available for stages', 
-                 '8server' : 'run as http server'
+                 '4addscript' : 'add a script to a buildset',
+                 '5rmscript'  : 'remove a script from a buildset',
+                 #'6release' : 'release scripts from a given buildset',
+                 '6import' : 'import scripts to be available for buildsets', 
+                 '7server' : 'run as http server'
                  }
 
     keys = commands.keys()
     keys.sort()
     for i in keys:
-        out += "  " + i[1:].ljust(7) + " : " + commands[i] + "\n"
+        out += "  " + i[1:].ljust(9) + " : " + commands[i] + "\n"
 
-    print out
-        
-options, args = config.get_config([
-    ('c', 'config-filename', 'config file location (~/zbuildwork/zbuild.conf)', '~/zbuildwork/zbuild.conf'),
-    ('l', 'log-filename', 'log file location (default ~/zbuildwork/zbuild.log)', "~/zbuildwork/zbuild.log"),
-    ('e', 'environment', 'Environment (development,production,staging,demo) default development', 'development'),
-    ('C', 'svn-copy', 'path of where to put svn checkout copy (default ~/zbuildwork/zbuild-repos-local-copy)', '~/zbuildwork/zbuild-repos-local-copy'),
-    ('r', 'repos', 'url to repository', 'git@github.com:jcd/zbuild.git'),
-    ('d', 'released-debs-path', 'path where to put released deb packages (default ~/zbuildwork/deb-repos)', '~/zbuildwork/deb-repos'),
-    ('w', 'work-dir', 'path of where to do the builds (default ~/zbuildwork/workdir)', '~/zbuildwork/workdir'),
-    ('s', 'stage', 'name of stage to build (in stages/ dir). An alternative to using an argument.', None),
-    ('n', 'no-clean', 'do not clean existing target but rebuild (default off)', None),
-    ('R', 'revision', 'svn revision to build (default HEAD)', "HEAD"),
-    ('B', 'branch', 'git branch to build (default master)', "master"),
-    ('i', 'start-index', "When command is 'build' this is the index of the stage to start at (default 0)", "0"),
-    ('I', 'stop-index', "When command is 'build' this is the index of the stage to stop at (default inf)", "10000000"),
-    ('b', 'enable-release', 'this build will release packages (default off)', False),
-    ('P', 'packages', 'setup dir for stages and packages available (default ./packages)', './packages'), 
-    ('p', 'port', 'Listen on port (default 8765)', "8765")
-    ], "usage: zbuild [options] command ...")
+    return out
 
-options.start_index = int(options.start_index)
-options.stop_index = int(options.stop_index)
-options.port = int(options.port)
-pidfile = '/tmp/zbuild.pid'
-script_dir = None
-
-if __name__ == "__main__":
-
-    if options is None:
-        usage()
-        sys.exit(0)
-
-    # Change to script dir
-    script_dir = os.path.abspath(sys.path[0])
-
-    # Setup svn home env variable
-    os.environ['BUILDER_SVN'] = os.path.expanduser(options.svn_repos)
-    os.environ['BUILDER_GIT'] = os.path.expanduser(options.git_repos)
-    os.environ['BUILDER_REPOS_LOCAL_COPY'] = os.path.expanduser(options.svn_copy)
-    os.environ['BUILDER_WORKDIR'] = os.path.expanduser(options.work_dir)
-    os.environ['BUILDER_RELEASE_DIR'] = os.path.expanduser(options.released_debs_path)
-    os.environ['REV'] = os.path.expanduser(options.revision) # deprecated
-    os.environ['BUILDER_REV'] = os.path.expanduser(options.revision)
-    os.environ['BUILDER_BRANCH'] = os.path.expanduser(options.branch)
-    os.environ['BUILDER_ENVIRONMENT'] = options.environment
-
-    os.environ['BUILDER_NOCLEAN_ENABLED'] = "1" # always enabled for now
-    if options.no_clean:
-        os.environ['BUILDER_NOCLEAN_ENABLED'] = "1"
-        
-    if options.enable_release:
-        os.environ['BUILDER_RELEASE_ENABLED'] = "1"
-
-    if options.enable_release:
-        os.environ['BUILDER_RELEASING'] = "1"
-        
-    os.environ['BUILDER_STARTDIR'] = os.path.abspath(os.curdir)
-
-    progname = "zbuild"
-
-    options.packages = os.path.expanduser(options.packages)
-    #if not stages.init_stages(sys.stdout.write, options.packages):
-    #    sys.exit(1)
-    #options.packages = stages.config_path
-    workdir = os.path.expanduser(options.work_dir)
-    mkdirp(workdir)
-    sqlitepath = "%s/zbuild.sqlite" % workdir 
-
+def initdb(allow_create = True):
+    """
+    Open database STORE - creating it if necessary
+    """
+    global STORE
+    sqlitepath = "%s/zbuild.sqlite" % WORKDIR 
     if not os.path.exists(sqlitepath):
+        if not allow_create:
+            STORE = None
+            return False
+
         # setup the sqlite database
         print "No existing sqlite database -> creating"
         schema = "lib/dbschema.sql"
@@ -604,11 +450,92 @@ if __name__ == "__main__":
         #os.system("sqlite3 < '%s'" % schema)
 
     sdb = create_database("sqlite:%s" % sqlitepath)
-    global store
-    store = Store(sdb)
+    STORE = Store(sdb)
+    return True
+        
+config.get_config([
+    ('w', 'work-dir', 'path of where to work', '~/zbuild-work'),
+    ('b', 'build-area', 'path of where to do the builds', '<work-dir>/build-area'),
+    ('c', 'config-filename', 'config file location', '<work-dir>/zbuild.conf'),
+    ('l', 'log-filename', 'log file location', "<work-dir>/zbuild.log"),
+    ('e', 'environment', 'Environment', 'development', ['development', 'production', 'staging', 'demo']),
+    ('C', 'repos-copy', 'path of where to put svn checkout copy', '<work-dir>/repos-local-copy'),
+    # ('r', 'repos', 'url to repository', 'git://github.com/jcd/zbuild.git'),
+    ('d', 'released-debs-path', 'path where to put released deb scripts', '<work-dir>/deb-repos'),
+    ('s', 'buildset', 'name of buildset to build. An alternative to using an argument.', 'no-buildset'),
+    ('n', 'no-clean', 'do not clean existing target but rebuild'),
+    ('R', 'revision', 'svn revision to build', "HEAD"),
+    ('B', 'branch', 'git branch to build', "master"),
+    ('i', 'start-index', "When command is 'build' this is the index of the buildset to start at", 0),
+    ('I', 'stop-index', "When command is 'build' this is the index of the buildset to stop at", 10000000),
+    #('b', 'enable-release', 'this build will release scripts'),
+    ('P', 'scripts', 'setup path for buildsets and scripts available', './scripts:<work-dir>/scripts'), 
+    ('p', 'port', 'Listen on port', 8765)
+    ], epilog=help_epilog(), usage=usage())
+
+PID_FILE = '/tmp/zbuild.pid'
+SCRIPT_DIR = None
+WORK_DIR = None
+
+if __name__ == "__main__":
+
+    if OPTIONS is None:
+        print help_epilog(True)
+        sys.exit(0)
+
+    WORKDIR = os.path.expanduser(OPTIONS.work_dir)
+    if not os.path.isdir(WORKDIR):
+        print "Creating work dir '%s'" % WORKDIR
+        utils.mkdirp(WORKDIR)
+
+    for i in ['config_filename', 'log_filename', 'repos_copy',
+              'released_debs_path', 'scripts', 'build_area']:
+        dd = getattr(OPTIONS, i)
+        dd = os.path.expanduser(dd.replace('<work-dir>',WORKDIR))
+        setattr(OPTIONS, i, dd)
+
+    # Change to script dir
+    SCRIPT_DIR = os.path.abspath(sys.path[0])
+    OPTIONS.zbuild_install_dir = SCRIPT_DIR
+    BUILDDIR = OPTIONS.build_area
+    if not os.path.isdir(BUILDDIR):
+        print "Creating build dir '%s'" % BUILDDIR
+        utils.mkdirp(BUILDDIR)
+
+    RELEASEDIR = os.path.expanduser(OPTIONS.released_debs_path)
+    # Setup svn home env variable
+    # os.environ['ZBUILD_GIT'] = os.path.expanduser(OPTIONS.repos)
+    os.environ['ZBUILD_REPOS_LOCAL_COPY'] = os.path.expanduser(OPTIONS.repos_copy)
+    os.environ['ZBUILD_WORKDIR'] = WORKDIR
+    os.environ['ZBUILD_BUILDDIR'] = BUILDDIR
+    os.environ['ZBUILD_RELEASE_DIR'] = RELEASEDIR
+    os.environ['ZBUILD_REV'] = os.path.expanduser(OPTIONS.revision)
+    os.environ['ZBUILD_BRANCH'] = os.path.expanduser(OPTIONS.branch)
+    os.environ['ZBUILD_ENVIRONMENT'] = OPTIONS.environment
+
+    if not os.path.isdir(RELEASEDIR):
+        print "Creating release dir '%s'" % RELEASEDIR
+        utils.mkdirp(RELEASEDIR)
+
+    # os.environ['ZBUILD_NOCLEAN_ENABLED'] = "1" # always enabled for now
+    if OPTIONS.no_clean:
+        os.environ['ZBUILD_NOCLEAN_ENABLED'] = OPTIONS.no_clean and '1' or ''
+
+    # os.environ['ZBUILD_RELEASING'] = OPTIONS.enable_release and '1' or ''
+    os.environ['ZBUILD_STARTDIR'] = os.path.abspath(os.curdir)
+
+    #import pprint
+    #dlog(str(pprint.pformat(os.environ)))
+
+    progname = sys.argv[0]
+
+    OPTIONS.scripts = os.path.expanduser(OPTIONS.scripts).split(':')
+    #if not buildsets.init_buildsets(sys.stdout.write, OPTIONS.scripts):
+    #    sys.exit(1)
+    #OPTIONS.scripts = buildsets.config_path
     
-    if len(args) >= 1:
-        command = args[0].lower()
-        parse_commands(command,  args)
+    if len(ARGS) >= 1:
+        command = ARGS[0].lower()
+        parse_commands(command, ARGS)
     else:
-        usage()
+        print help_epilog(True)

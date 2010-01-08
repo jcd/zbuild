@@ -1,68 +1,108 @@
 from storm.locals import *
 from layout import table_layout,  counter_length
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
+import utils
 
-class stage(Storm):
-    __storm_table__ = 'stage'
+class buildset(Storm):
+    __storm_table__ = 'buildset'
     id = Int(primary=True)
     name = Unicode()
 
     @classmethod
     def dumpNames(cls, store,  os):
         """
-        Write all packages to outstream os
+        Write all scripts to outstream os
         """
-        stages = store.find(cls).order_by(cls.id)
-        counter_len = counter_length(stages.count())
+        buildsets = store.find(cls).order_by(cls.id)
+        counter_len = counter_length(buildsets.count())
         arr = [ ['idx ', 'name', ' duration'] ]
         idx = 0
-        for stage in stages:
-            dur = None # stages[i].metadata.get('duration',None)
+        if not buildsets.count():
+            os("    No buildsets - use 'addscript' command to add script to a new buildset\n")
+            return
+        for buildset in buildsets:
+            dur = None # buildsets[i].metadata.get('duration',None)
             if dur:
                 dur = ':'.join(str(dur).split(':')[1:])
             else:
                 dur = "  -"
             arr2 = []
             arr2.append(str(idx).rjust(counter_len,'0'))
-            arr2.append(stage.name)
+            arr2.append(buildset.name)
             arr2.append(" %s" % (str(dur).split('.')[0],))
             arr.append(arr2)
             idx += 1
         os(table_layout(arr, True, "    "))
-    
-    def dumpPackageNames(self,  os):
+                
+            
+    def dumpScriptNames(self, os):
             """
-            write list of packages to logger
+            write list of scripts to logger
             """
-            pks = Store.of(self).find(stage_package, stage_package.stage_id == self.id)
-            packs = pks.order_by(Asc(stage_package.idx))
-            counter_len = counter_length(packs.count())
+            store = Store.of(self)
+            pks = store.find(buildset_script, buildset_script.buildset_id == self.id)
+            scripts = pks.order_by(Asc(buildset_script.idx))
+            counter_len = counter_length(scripts.count())
             arr = [ ['idx ', 'name', ' duration'] ]
             idx = 0
-            for pack in packs:
-                packtime = None # i.metadata['timings'].get(i.name,None)
-                dur = "  -"
-                if packtime:
-                    dut = packtime.get('duration')
-                    if dur:
-                        dur = ':'.join(str(dur).split(':')[1:])
+
+            def scriptPath(_pack):
+                """
+                """
+                res = []
+                cur = _pack.script
+                while cur.parent:
+                    res.insert(0, cur.parent)
+                    cur = cur.parent
+                return res
+
+            def new(depth, pack_name, pack_idx, dur = None):
+                if dur is None:
+                    dur = "  -"
                 arr2 = []
-                arr2.append(str(pack.idx).rjust(counter_len,'0'))
-                arr2.append(pack.package.name)
+                arr2.append(pack_idx)
+                arr2.append(" " * (depth * 3) + pack_name)
                 arr2.append(" %s" % (str(dur).split('.')[0],))
-                arr.append(arr2)
+                return arr2
+
+            last_path = []
+            for pack in scripts:
+
+                path = scriptPath(pack)
+                depth = len(path)
+                if last_path != path and depth:
+                    arr.append(new(depth - 1,
+                                   path[-1].name,
+                                   ' '.rjust(counter_len,' ')))
+                last_path = path
+
+                dur = None
+                # Lookup last duration of script run
+                prevrun = store.find(build_script_status, 
+                                     build_script_status.buildset_script_id == pack.id,
+                                     build_script_status.exit_code == 0
+                                     ).order_by(Desc(build_script_status.id)).first()
+                
+                dur = "  -"
+                if prevrun and prevrun.end_time and prevrun.start_time:
+                    dur = prevrun.end_time - prevrun.start_time
+                    dur = utils.sec2str(dur.seconds)
+                arr.append(new(depth,
+                               pack.script.name, 
+                               str(pack.idx).rjust(counter_len,'0'),
+                               dur))
                 idx += 1
-            os(table_layout(arr, True, "    "))
+            os(table_layout(arr, True, "    ", False))
     
     @classmethod
     def getByIndex(cls, store,  idx):
         """
-        Get stage by index
+        Get buildset by index
         """
-        stages = store.find(cls).order_by(cls.id)
+        buildsets = store.find(cls).order_by(cls.id)
         curidx = 0
-        for i in stages:
+        for i in buildsets:
             if curidx == idx:
                 return i
             curidx += 1
@@ -82,54 +122,54 @@ class stage(Storm):
             pass
         return cls.getByName(store, ident)
         
-    def getPackageIndex(self,  pack):
-        """Return the index the given package has in this stage or None"""
-        if type(pack) != package:
+    def getScriptIndex(self,  pack):
+        """Return the index the given script has in this buildset or None"""
+        if type(pack) != script:
             return None
-        for i in self.stage_packages:
-            if i.package_id == pack.id:
+        for i in self.buildset_scripts:
+            if i.script_id == pack.id:
                 return i.idx
         return None
         
-    def addPackage(self, pack,  before_package_idx = sys.maxint):
-        """Add a new package to this stage"""
-        idx = int(before_package_idx)
+    def addScript(self, pack,  before_script_idx = sys.maxint):
+        """Add a new script to this buildset"""
+        idx = int(before_script_idx)
         store = Store.of(self)
-        pks = store.find(stage_package, stage_package.stage_id == self.id)
-        m = pks.max(stage_package.idx) 
+        pks = store.find(buildset_script, buildset_script.buildset_id == self.id)
+        m = pks.max(buildset_script.idx) 
         if m is None:
-            # First package is added
+            # First script is added
             idx = 0
         elif m < idx:
             # append using m+1
             idx = m + 1
         
         # move all tasks with higher or equal index that idx one step
-        opks = pks.order_by(Desc(stage_package.idx))
+        opks = pks.order_by(Desc(buildset_script.idx))
         for i in opks:
             if i.idx >= idx:
                 i.idx += 1
         
         # Create new pack
-        spack = stage_package()
-        spack.stage_id = self.id
-        spack.package_id = pack.id
+        spack = buildset_script()
+        spack.buildset_id = self.id
+        spack.script_id = pack.id
         spack.idx = idx
             
         store.add(spack)
         store.commit()
 
-    def removePackage(self,  pack):
-        """Remove package from stage. Pack is eigther a db.package or an index"""
-        idx = self.getPackageIndex(pack)
+    def removeScript(self,  pack):
+        """Remove script from buildset. Pack is eigther a db.script or an index"""
+        idx = self.getScriptIndex(pack)
         if not idx:
-            # pack is not a package instance in this stage, then it must be an index
+            # pack is not a script instance in this buildset, then it must be an index
             idx = int(pack)
             
         store = Store.of(self)
-        pks = store.find(stage_package, stage_package.stage_id == self.id)
-        opks = pks.order_by(Asc(stage_package.idx))
-        # Correct idx for packs larger that the one removed
+        pks = store.find(buildset_script, buildset_script.buildset_id == self.id)
+        opks = pks.order_by(Asc(buildset_script.idx))
+        # Correct idx for scripts larger that the one removed
         for i in opks:
             if i.idx == idx:
                 store.remove(i)
@@ -137,24 +177,121 @@ class stage(Storm):
                 i.idx -= 1
         store.commit()
             
-class package(Storm):
-    __storm_table__ = 'package'
+class script(Storm):
+    __storm_table__ = 'script'
     id = Int(primary=True)
     name = Unicode()
     path = Unicode()
     parent_id = Int()
+    is_parent = Int()
+
+    def getPath(self):
+        """
+        Return path of script by constructing an array with parents
+        prepended and self as the last entry.
+        """
+        return self.parent and [self.parent, self] or [self]
     
+
+    def getCommonPath(self, other_script):
+        """
+        Return the part the path (see getPath) that self and
+        other_script have in common
+        """
+        if not other_script:
+            return []
+
+        me = self.getPath()
+
+        if self == other_script:
+            return me
+
+        other = other_script.getPath()
+        res = []
+
+        while me and other and me[0] == other[0]:
+            me.pop(0)
+            other.pop(0)
+            res.append(i1)
+        return res        
+
+    def getPathChange(self, other_script):
+        """
+        Return the part of the path (see getPath) that self and
+        other_script does not have in common
+        """
+        me = self.getPath()
+
+        if self == other_script:
+            return (me, [])
+
+        if not other_script:
+            return ([],me)
+
+        other = other_script.getPath()
+        
+        common = []
+        while me and other and me[0] == other[0]:
+            common.append(me[0])
+            me.pop(0)
+            other.pop(0)
+
+        return (common, me)
+
+    def depth(self):
+        d = 0
+        cur = self
+        while cur.parent_id:
+            d += 1
+            cur = cur.parent
+        return d
+
+
+    def getLeafs(self):
+        store = Store.of(self)
+        scripts = store.find(script, script.parent_id == self.id).order_by(Asc(script.name))
+
+        if scripts.count() == 0:
+            return [self]
+
+        res = []
+        for i in scripts:
+            res.extend(i.getLeafs())
+        return res
+
+
+    @classmethod
+    def getIndexedListing(cls, store):
+        """
+        Return a list of all scripts sorted by script grouping
+        """
+        scripts = store.find(cls, cls.is_parent == 0).order_by(Asc(cls.parent_id))
+        counter_len = counter_length(scripts.count())
+
+        res = []
+        last = None
+        for s in scripts:
+            common, diff = s.getPathChange(last)
+            last = s
+            res.extend(diff)
+        return res
+
+
     @classmethod
     def dumpNames(cls, store,  os):
         """
-        Write all packages to outstream os
+        Write all scripts to outstream os
         """
         idx = 0
-        packs = store.find(cls).order_by(cls.id)
-        counter_len = counter_length(packs.count())
+        scripts = cls.getIndexedListing(store)
+        counter_len = counter_length(len(scripts))
         arr = [ ['idx ','name',' duration'] ]
         
-        for pack in packs:
+        if not scripts:
+            os("    No scripts - use the import-scripts command\n")
+            return
+
+        for pack in scripts:
             dur = None # pack.metadata.get('duration',None)
             if dur:
                 dur = ':'.join(str(dur).split(':')[1:])
@@ -162,8 +299,9 @@ class package(Storm):
                 dur = "  -"
             arr2 = []
             arr2.append(str(idx).rjust(counter_len,'0'))
-            arr2.append(pack.name)
+            arr2.append(" " * (pack.depth() * 3) + pack.name)
             arr2.append(" %s" % (str(dur).split('.')[0],))
+            #arr2.append("%i" % pack.depth())
             arr.append(arr2)
             idx += 1
         os(table_layout(arr, True, "    "))
@@ -171,11 +309,11 @@ class package(Storm):
     @classmethod
     def getByIndex(cls, store,  idx):
         """
-        Get stage by index
+        Get buildset by index
         """
-        packs = store.find(cls).order_by(cls.id)
+        scripts = cls.getIndexedListing(store)
         curidx = 0
-        for i in packs:
+        for i in scripts:
             if curidx == idx:
                 return i
             curidx += 1
@@ -183,7 +321,7 @@ class package(Storm):
     
     @classmethod
     def getByName(cls, store, name):
-        return store.find(cls,  name == cls.name).one()
+        return store.find(cls, name == cls.name).one()
     
     @classmethod
     def getByIdent(cls, store, ident):
@@ -196,13 +334,13 @@ class package(Storm):
         return cls.getByName(store, ident)
         
 
-class stage_package(Storm):
-    __storm_table__ = 'stage_package'
+class buildset_script(Storm):
+    __storm_table__ = 'buildset_script'
     id = Int(primary=True)
-    last_duration = DateTime()
+    last_duration = Int()
     idx = Int()
-    stage_id = Int()
-    package_id = Int()
+    buildset_id = Int()
+    script_id = Int()
 
 class build(Storm):
     __storm_table__ = 'build'
@@ -212,14 +350,14 @@ class build(Storm):
     end_time = DateTime()
     work_dir = Unicode()
     info = Unicode()
-    stage_id = Int()
+    buildset_id = Int()
     
     @classmethod
-    def createFromStage(cls, dbstage,  scheduled_for = None):
-        """Create a new build using the stage provided"""
-        store = Store.of(dbstage)
+    def createFromBuildset(cls, dbbuildset,  scheduled_for = None):
+        """Create a new build using the buildset provided"""
+        store = Store.of(dbbuildset)
         b = cls()
-        b.stage_id = dbstage.id
+        b.buildset_id = dbbuildset.id
         
         if scheduled_for is None:
                 scheduled_for = datetime.utcnow()
@@ -227,35 +365,58 @@ class build(Storm):
         store.add(b)
         store.flush()
         
-        # assign packages to be build
-        for sp in dbstage.stage_packages:
-            bp = build_package()
-            bp.stage_package_id = sp.id
+        # assign scripts to be build
+        #print str(dbbuildset.buildset_scripts)
+        for sp in dbbuildset.buildset_scripts:
+            bp = build_script_status()
+            bp.buildset_script_id = sp.id
             bp.build_id = b.id
-            print "%s %i" % (sp.package.name,  sp.idx)
-            print str(sp.idx) 
+            #print "%s %s" % (str(sp.script.name),  str(sp.idx))
+            #print "%s" % str(sp.idx)
+            #print str(sp.idx) 
             bp.idx = sp.idx
             store.add(bp)
         store.commit()
         return b
+
+    def getDurations(self):
+        """ Return a tuple of (duration, eta duration) """
+        duration = 0
+        eta_duration = 0
+        store = Store.of(self)
+
+        for status in self.build_script_statuses:
+                start_time = status.start_time
+                end_time = status.end_time or datetime.utcnow()
+                if start_time:
+                    duration += (end_time - start_time).seconds
         
-class build_package(Storm):
-    __storm_table__ = 'build_package'
+                last = status.buildset_script.last_duration
+                if last:
+                    eta_duration += last
+
+        return (duration, eta_duration)
+
+class build_script_status(Storm):
+    __storm_table__ = 'build_script_status'
     id = Int(primary=True)
     start_time = DateTime()
     end_time = DateTime()
     idx = Int()
     log = Unicode()
-    stage_package_id = Int()
+    exit_code = Int()
+    buildset_script_id = Int()
     build_id = Int()
 
-package.parent = Reference(package.id, package.parent_id)
+script.parent = Reference(script.parent_id, script.id)
 
-stage.stage_packages = ReferenceSet(stage.id, stage_package.stage_id)
-stage_package.package = Reference(stage_package.package_id,  package.id)
-stage_package.stage = Reference(stage.id, stage_package.id)
+buildset.buildset_scripts = ReferenceSet(buildset.id, buildset_script.buildset_id)
+buildset_script.script = Reference(buildset_script.script_id, script.id)
+buildset_script.buildset = Reference(buildset_script.buildset_id, buildset.id)
 
-build.stage = Reference(build.stage_id,  stage.id)
-build.build_packages = ReferenceSet(build.id, build_package.build_id)
-build_package.build = Reference(build.id, build_package.build_id)
-build_package.stage_package = Reference(build_package.stage_package_id, stage_package.id)
+build.buildset = Reference(build.buildset_id, buildset.id)
+build.build_script_statuses = ReferenceSet(build.id, build_script_status.build_id)
+
+# build.build_scripts = ReferenceSet(build.id, build_script.build_id)
+build_script_status.build = Reference(build_script_status.build_id, build.id)
+build_script_status.buildset_script = Reference(build_script_status.buildset_script_id, buildset_script.id)
