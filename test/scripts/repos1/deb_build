@@ -1,0 +1,2 @@
+#!/bin/bash
+zbuild_build_debian_package repos1

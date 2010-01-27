@@ -1,0 +1,91 @@
+#!/usr/bin/make -f
+# -*- makefile -*-
+# Sample debian/rules that uses debhelper.
+# This file was originally written by Joey Hess and Craig Small.
+# As a special exception, when this file is copied by dh-make into a
+# dh-make output file, you may use that output file without restriction.
+# This special exception was added by Craig Small in version 0.37 of dh-make.
+
+# Uncomment this to turn on verbose mode.
+export DH_VERBOSE=1
+
+# This is the debhelper compatibility version to use.
+export DH_COMPAT=5
+
+DEB_MAKE_INVOKE = $(DEB_MAKE_ENVVARS) $(MAKE)
+
+#DEB_MAKE_INSTALL_TARGET = install DESTDIR=$(DEB_DESTDIR)
+
+#DEB_DH_INSTALL_ARGS = --sourcedir=debian/tmp
+
+common-configure-arch common-configure-indep:: common-configure-impl
+common-configure-impl:: 
+	@echo "nothing to do here"
+
+cleanbuilddir::
+	@echo "nothing to clear"
+
+configure: configure-stamp
+configure-stamp: 
+	dh_testdir
+	# Add here commands to configure the package.
+
+	touch configure-stamp
+
+build: build-stamp
+build-stamp: configure-stamp 
+	dh_testdir
+
+	# Add here commands to compile the package.
+	#$(MAKE)
+
+	touch $@
+
+clean:
+	dh_testdir
+	dh_testroot
+	rm -f build-stamp configure-stamp 2>/dev/null
+
+	# Add here commands to clean up after the build process.
+	#-$(MAKE) clean
+	if [ -d "$(CURDIR)/debian/tmp" ]; then rm -r "$(CURDIR)/debian/tmp" 2>/dev/null; fi
+
+	dh_clean  
+
+install: build
+	dh_testdir
+	dh_testroot
+	dh_clean -k 
+	dh_installdirs
+
+	# Add here commands to install the package into debian/tmp
+	#$(MAKE) DESTDIR=$(CURDIR)/debian/tmp install
+	install -d $(CURDIR)/debian/tmp/usr/share/repos1/
+	# Copy files
+	install -D README $(CURDIR)/debian/tmp/usr/share/repos1/
+
+# Build architecture-independent files here.
+binary-indep: build install
+	dh_testdir
+	dh_testroot
+	dh_installchangelogs 
+	dh_installdocs
+	dh_installdebconf
+	dh_install
+	dh_installcron
+	dh_installlogrotate
+	dh_installinit
+	dh_link
+	dh_compress
+	dh_fixperms
+	dh_installdeb
+	dh_gencontrol
+	dh_md5sums
+	dh_builddeb
+
+# Build architecture-dependent files here.
+binary-arch: build install
+# We have nothing to do by default.
+
+binary: binary-indep binary-arch
+.PHONY: build clean binary-indep binary-arch binary install configure

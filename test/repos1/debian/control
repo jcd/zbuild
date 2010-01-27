@@ -1,0 +1,14 @@
+Source: repos1
+Priority: extra
+Maintainer: Jonas Christian Drewsen <jdrewsen@gmail.com>
+Build-Depends: python (>=2.4.4)
+Standards-Version: 3.7.2
+Section: extra
+
+Package: repos1
+Section: extra
+Architecture: all
+Depends: python (>=2.4.4.)
+Description: zbuild test build repos1
+ zbuild test build repos1 used during unit testing zbuild
+

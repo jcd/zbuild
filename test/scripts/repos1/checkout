@@ -1,0 +1,2 @@
+#!/bin/bash
+zbuild_git_checkout ./repos1
