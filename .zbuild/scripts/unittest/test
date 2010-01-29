@@ -1,0 +1,28 @@
+#!/bin/bash
+#
+# Unit testing
+#
+cd 
+
+# 1, testing here in my worktree
+#      unit testing
+#      booting a system in worktree and test functions
+# 2, testing staging
+#      unit testing
+#      booting a system from packs and test functions
+# 3, testing prod
+#      test safe functions
+
+
+
+
+1 build + unit test work tree
+2 build + func test work tree
+3 build + deb_pack + install + unit test + func test staging
+4 install + safe func test prod
+
+
+1: zbuild unittest
+2: zbuild functest
+3: zbuild stage -h host.dk
+4: zbuild release
