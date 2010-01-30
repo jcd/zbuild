@@ -1,0 +1,18 @@
+#!/bin/bash
+#
+# Functional testing -  call your functional tests from here.
+#
+# Functional tests should test the functional parts of the software e.g.
+# by starting a service and interact
+#
+# This script is run in the directory where zbuild was invoked
+# usefull env vars:
+
+# ZBUILD_EXECUTABLE   : full path to zbuild executable
+# ZBUILD_WORKDIR      : the work dir of zbuild - usually myproject/.zbuild 
+# ZBUILD_PWD          : the dir where zbuild was invoked
+# ZBUILD_BUILDDIR     : the build dir of zbuild - usually myproject/.zbuild/build-area
+# ZBUILD_ENVIRONMENT  : zbuild mode - development, staging, demo or release
+
+echo "This test is successful because the exit status is 0"
+exit 0

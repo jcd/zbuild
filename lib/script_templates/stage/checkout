@@ -1,0 +1,5 @@
+#!/bin/bash
+#
+# Checkout the software from (remote) repository
+#
+zbuild_git_checkout git://github.com/jcd/zbuild.git

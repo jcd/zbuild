@@ -1,0 +1,5 @@
+#!/bin/bash
+#
+# Tests to ensure production is working. 
+# This is run on production servers.
+#

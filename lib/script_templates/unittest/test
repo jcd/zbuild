@@ -1,0 +1,18 @@
+#!/bin/bash
+#
+# Unit testing -  call your unit tests from here.
+#
+# Unit tests should test modules of the software - possibly without
+# starting the software itself.
+#
+# This script is run in the directory where zbuild was invoked
+# usefull env vars:
+
+# ZBUILD_EXECUTABLE   : full path to zbuild executable
+# ZBUILD_WORKDIR      : the work dir of zbuild - usually myproject/.zbuild 
+# ZBUILD_PWD          : the dir where zbuild was invoked
+# ZBUILD_BUILDDIR     : the build dir of zbuild - usually myproject/.zbuild/build-area
+# ZBUILD_ENVIRONMENT  : zbuild mode - development, staging, demo or release
+
+echo "This test is successful because the exit status is 0"
+exit 0

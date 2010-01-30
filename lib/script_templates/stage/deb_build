@@ -1,0 +1,6 @@
+#!/bin/bash
+#
+# If the software contains a 'debian' directory ie. can be build as a
+# debian package then this command will build the debian package(s)
+#
+zbuild_git_checkout git://github.com/jcd/zbuild.git
