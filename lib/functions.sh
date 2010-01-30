@@ -6,18 +6,6 @@ export LANG="en_US.UTF-8"
 #
 # Common functions that can be helpfull in creating build bash scripts
 #
-if [ -z $ZBUILD_REPOS_LOCAL_COPY ]; then
-    export ZBUILD_REPOS_LOCAL_COPY=~/zbuild-workdir/repos-local-copy
-fi
-if [ -z $ZBUILD_WORKDIR ]; then
-    export ZBUILD_WORKDIR=~/zbuild-workdir
-fi
-if [ -z $ZBUILD_BUILDDIR ]; then
-    export ZBUILD_BUILDDIR=~/zbuild-workdir/build-area
-fi
-if [ -z $ZBUILD_RELEASE_DIR ]; then
-    export ZBUILD_RELEASE_DIR=~/zbuild-workdir/deb-repos
-fi
 
 #
 # Logging
@@ -76,17 +64,38 @@ zbuild_release_enabled() {
 #
 zbuild_get_version() {
 
-    if [ $# -lt 1 ]; then zlog "zbuild_get_version needs build dir as first parameter"; fi
+    D=`pwd`
+    if [ $# -ge 1 ]; then
+	D=$1
+    fi
 
-    head -n 1 $1/debian/changelog | sed -e 's/.*(\(.*\)).*/\1/'
+    # .zbuild/version has precedence.
+    if [ -f "$D/.zbuild/version" ]; then
+	sed -n -e's/[[:blank:]]*\([[:graph:]]\+\).*/\1/ p' "$D/.zbuild/version"
+	return 0
+    fi
+    
+    # fallback to debian changlog file if that exists
+    head -n 1 $D/debian/changelog | sed -e 's/.*(\(.*\)).*/\1/'
 }
 
-zbuild_get_repos_revision() {
+zbuild_get_revision() {
 
-    if [ $# -lt 1 ]; then zlog "zbuild_get_repos_revision needs build dir as first parameter"; fi
+    D=`pwd`
+    if [ $# -ge 1 ]; then
+	D=$1
+    fi
 
+    # .zbuild/version has precedence.
+    if [ -f "$D/.zbuild/revision" ]; then
+	sed -n -e's/[[:blank:]]*\([[:graph:]]\+\).*/\1/ p' "$D/.zbuild/revision"
+	return 0
+    fi
+
+    pushd $D >/dev/null
     git log --pretty=oneline | wc -l
-    
+    popd >/dev/null
+
     #D=`git log | head -n 3 | tail -n 1 | sed -ne 's/^Date:[[:blank:]]\+\(.*\) +..../\1/ p'`
     #TF=`tempfile`
     #echo "import time" > $TF
@@ -128,14 +137,14 @@ zbuild_get_builddir() {
 #
 # Checkout a package from git: repos [branch]
 #
-zbuild_checkout() {
+zbuild_git_checkout() {
 
     # Src dir is the first arg
     if [ $# -ge 1 ]; then
 	PACKNAME=`basename "$1"`
 	GITSOURCE="$1"
    else
-	zerr "No git source provided to build in zbuild_checkout" 
+	zerr "No git source provided to build in zbuild_git_checkout" 
 	return 1
     fi
 
@@ -169,8 +178,7 @@ zbuild_checkout() {
 
     if [ ! -d "$ZBUILD_REPOS_LOCAL_COPY/$PACKNAME" ]; then
 	zlog "git checkout of local git copy $GITSOURCE"
-	cd "$ZBUILD_REPOS_LOCAL_COPY"
-	git clone "$GITSOURCE"
+	git clone "$GITSOURCE" "$ZBUILD_REPOS_LOCAL_COPY/$PACKNAME"
     else
 	zlog "git update of local git copy $GITSOURCE"
 	zlog "local copy in $ZBUILD_REPOS_LOCAL_COPY/$PACKNAME"
@@ -179,17 +187,22 @@ zbuild_checkout() {
     fi
     
     # Remove existing checkout if any
-    zlog "Removing old working copy of $PACKNAME"
-    rm -rf "$BUILDDIR"
+    if [ -d "$BUILDDIR" ]; then
+	zlog "Removing old working copy of $PACKNAME"
+	rm -rf "$BUILDDIR"
+    fi
 
     # Copy local GIT repos copy to working area
     zlog "Copying local git copy to workdir $BUILDDIR"
-    zlog "cp -r $ZBUILD_REPOS_LOCAL_COPY/$PACKNAME $ZBUILD_BUILDDIR/"
+    # zlog "cp -r $ZBUILD_REPOS_LOCAL_COPY/$PACKNAME $ZBUILD_BUILDDIR/"
     cp -r "$ZBUILD_REPOS_LOCAL_COPY/$PACKNAME" "$ZBUILD_BUILDDIR/"
 
     # Update the correct refspec
+
     zlog "Updating checkout in build dir to revision $REV"
+
     cd "$BUILDDIR"
+
     filter_stderr "git checkout $REFSPEC" 'Already on'
 
     zlog "Done updating checkout in $BUILDDIR"
@@ -204,7 +217,7 @@ zbuild_packnames() {
 
     PACKS=`grep "Package" $1/debian/control | cut -f2 -d':'`
     VER=`head -n 1 $1/debian/changelog | sed -e 's/.*(\([0-9\.]*\)-.*).*/\1/'`
-    REV=`zbuild_get_repos_revision $1`
+    REV=`zbuild_get_revision $1`
     for PACK in $PACKS ; do 
 	DEB_BASEPACK="${PACK}_${VER}-${REV}"
 	echo $DEB_BASEPACK
@@ -217,65 +230,53 @@ zbuild_aptget_packnames() {
 
     PACKS=`grep "Package" $1/debian/control | cut -f2 -d':'`
     VER=`head -n 1 $1/debian/changelog | sed -e 's/.*(\([0-9\.]*\)-.*).*/\1/'`
-    REV=`zbuild_get_repos_revision $1`
+    REV=`zbuild_get_revision $1`
     for PACK in $PACKS ; do 
 	DEB_BASEPACK="${PACK}=${VER}-${REV}"
 	echo $DEB_BASEPACK
     done
 }
 
-zbuild_build() {
+#
+# zbuild_build [pack_name [build dir]]
+#
+zbuild_build_debian_package() {
 
-    # Src dir is the first arg
     if [ $# -ge 1 ]; then
-	PACKNAME="$1"
+	PACKNAME=$1
+	BUILDDIR="$ZBUILD_BUILDDIR/$PACKNAME"
     else
-	echo "No package directory provided to build in zbuild_build_git"
+	# Assume pwd is the location of the package
+	BUILDDIR=`pwd`
+	PACKNAME=`basename $BUILDDIR`
+    fi
+
+    # First remove build revision of present changelog if that exists
+    if [ ! -e $BUILDDIR/debian/changelog ]; then
+	zerr "Could not find $BUILDDIR/debian/changelog"
 	return 1
     fi
 
-    # Branch to build 
-    REFSPEC="$ZBUILD_REFSPEC"
-    if [ -z $ZBUILD_REFSPEC ]; then
-	REFSPEC="master"
-    fi
-
-    BUILDDIR="$ZBUILD_BUILDDIR/$PACKNAME"
-    zbuild_build_internal $BUILDDIR $PACKNAME
-}
-
-#
-# zbuild_build <build dir> <pack_name> 
-#
-zbuild_build_internal() {
-
-    BUILDDIR=$1
-    cd $BUILDDIR
-
-    PACK=$2
-
-    # First remove build revision if present
-    pwd
-    sed -i -e "1,1 s/\(.*\)(\([0-9\.]*\)-.*)\(.*\)/\1(\2)\3/" debian/changelog
+    sed -i -e "1,1 s/\(.*\)(\([0-9\.]*\)-.*)\(.*\)/\1(\2)\3/" $BUILDDIR/debian/changelog
 
     # First remove any existing debian packages matching this dir
-    PACKS=`grep "Package" debian/control | cut -f2 -d':'`
+    PACKS=`grep "Package" $BUILDDIR/debian/control | cut -f2 -d':'`
 
     # Current version according to debian/control
-    VER=`zbuild_get_version .`
+    VER=`zbuild_get_version $BUILDDIR`
     ORIG_VER=$VER
 
     # Actual revision to be used
-    REV=`zbuild_get_repos_revision .`
+    REV=`zbuild_get_revision $BUILDDIR`
 
     echo "$PACKS"
 
-    rm debian/files 2>/dev/null
+    rm $BUILDDIR/debian/files 2>/dev/null
 
     for PACK in $PACKS ; do 
 	DEB_BASEPACK="${PACK}_${VER}-${REV}"
 	echo "Removing existing packages '$DEB_BASEPACK*.{deb,changes,tar.gz,dsc}'"
-	rm -f ./../$DEB_BASEPACK*.{deb,changes,tar.gz,dsc}
+	rm -f $BUILDDIR/../$DEB_BASEPACK*.{deb,changes,tar.gz,dsc}
     done
 
     if [ ! -z "$ZBUILD_RELEASING" ]; then
@@ -297,6 +298,8 @@ zbuild_build_internal() {
 	#fi
 	echo ""
     fi
+
+    pushd $BUILDDIR
 
     # Dont let modified file disturb tagging
     git checkout -- debian/changelog
@@ -322,7 +325,6 @@ zbuild_build_internal() {
 	OPT="-nc"
     fi
 
-    pushd .
     if dpkg-buildpackage $OPT -us -uc -rfakeroot 2>&1 >$LOGFILE
 	then 
 	echo "Building $DEB_BASEPACK successful"
@@ -455,20 +457,20 @@ is_jailed() {
 export -f zjail_id
 export -f is_jailed
 export -f zbuild_get_ip
-export -f zbuild_checkout
-export -f zbuild_build
-export -f zbuild_build_internal
+export -f zbuild_git_checkout
+export -f zbuild_build_debian_package
 export -f zbuild_install
 export -f zbuild_upload
 export -f zbuild_release
 export -f zbuild_get_builddir
 export -f zbuild_get_version
-export -f zbuild_get_repos_revision
+export -f zbuild_get_revision
 export -f zbuild_packnames
 export -f zbuild_aptget_packnames
 export -f zbuild_noclean_enabled
 export -f zbuild_release_enabled
 export -f zlog
+export -f zerr
 export -f filter_stderr
 
 # execute script as first arg if available

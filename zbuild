@@ -16,382 +16,16 @@ import sys
 import os
 import os.path
 from  datetime import datetime
-import lib.config as config
-from storm.locals import *
-from lib import db, server, script_import, utils, building
-from lib.utils import dlog
-
-STORE = None
-
-def parse_commands(cmd,  args):
-    """
-    Parse the command from command and perform
-    """
-    argc = len(args)
-
-    if command == 'build':
-        # Build the specified buildset
-        if not initdb(False):
-            dlog("Error: database empty - use 'import' to populate")
-            return
-        if argc < 2:
-            dlog("Usage: %s build <buildset name/idx>" % (progname,))
-            dlog("\nAvailable buildsets:\n")
-            db.buildset.dumpNames(STORE,  sys.stdout.write)
-            return False
-                    
-        if not utils.lockPid(PID_FILE):
-            dlog("Pidfile already exists -> aborting")
-            return False
-        
-        buildset = db.buildset.getByIdent(STORE, unicode(args[1]))
-        if not buildset:
-            print u"Error: No buildset called '%s'" % unicode(args[1])
-            # Clean up for next run
-            os.remove(PID_FILE)
-            return
-
-        print u'Using buildset "%s"' % buildset.name
-
-        build = db.build.createFromBuildset(buildset)
-        building.run_build(build, STORE)
-        
-        # Clean up for next run
-        os.remove(PID_FILE)
-
-    elif command in ( "addscript", "rmscript" ):
-        # Add specified script to buildset
-
-        # allow creating the database if this is a addscript
-        if not initdb(False):
-            dlog("Error: database empty - use 'import' to populate")
-            return
-
-        if argc < 3:
-            if command == "addscript":
-                dlog("Usage: %s addscript <buildset name/idx> <script name/idx> [before name/idx]" % (progname,))
-                dlog("       if before idx is not provided, the script will be")
-                dlog("       inserted at end of buildset")
-            else:
-                dlog("Usage: %s rmscript <buildset name/idx> <script name/idx>" % (progname,))
-            return False
-
-        buildset_ident = unicode(args[1])
-        buildset = db.buildset.getByIdent(STORE, buildset_ident)
-        idents = map(lambda a: a.strip(), unicode(args[2]).split(','))
-
-        for ident in idents:
-            pack_ident = unicode(ident)
-        
-            pack = db.script.getByIdent(STORE, pack_ident)
-            
-            if buildset is None and command == 'rmscript':
-                dlog("Error: No such buildset " + buildset_ident)
-                return False
-            
-            if pack is None:
-                dlog("Error: No such script " + pack_ident)
-                return False
-            
-            if buildset is None:
-                dlog("No such buildset " + args[1] + " -> Adding")
-                buildset = db.buildset()
-                buildset.name = buildset_ident
-                STORE.add(buildset)
-                STORE.flush()
-                
-            if command == "addscript":
-                pack_idx = sys.maxint
-                if argc > 3:
-                    before_pack = db.script.getByName(STORE,  unicode(args[3])) # before name
-                    if before_pack:
-                        pack_idx = buildset.getScriptIndex(before_pack)
-                    else:
-                        pack_idx = int(args[3])
-
-                scripts = pack.getLeafs()
-                for i in scripts:
-                    dlog("Adding script %s to buildset %s" % (i.name, buildset.name))
-                    buildset.addScript(i,  pack_idx)
-            else:
-                try:
-                    idx = int(pack_ident)
-                except:
-                    idx = pack
-                buildset.removeScript(idx)
-        STORE.commit()
-        return True
-        
-    elif command == 'list':
-
-        if not initdb(False):
-            dlog("Error: database empty - use 'import' to populate")
-            return
-
-        sub = ""
-        if argc > 1:
-            sub = args[1]
-
-        if sub in ('scripts','buildsets',''):
-            if sub in ("scripts",''):
-                if sub == "":
-                    print "sub commands for this command :"
-                    print "  buildsets  : to list available buildsets only"
-                    print "  scripts    : to list available scripts only"
-                    print "  <name/idx> : the name or index of a buildset to list "
-                    print "               scripts in that buildset"
-                    print "\nAvailable scripts:\n"
-                db.script.dumpNames(STORE,  sys.stdout.write)
-
-            if sub in ("buildsets", ''):
-                if sub == "":
-                    print "\nAvailable buildsets:\n"
-
-                db.buildset.dumpNames(STORE,  sys.stdout.write)
-        else:
-            # A specific buildset has been specified. List that.
-            if argc < 2:
-                dlog("Usage: %s list <buildset name/idx>" % (progname,))
-                dlog("\nAvailable buildsets:\n")
-                db.buildset.dumpNames(STORE,  sys.stdout.write)
-                return False
-            buildset_ident = unicode(args[1])
-            buildset = db.buildset.getByIdent(STORE, buildset_ident)
-            if not buildset:
-                dlog("Error: No such buildset " + buildset_ident)
-                return False
-                
-            print "\nScripts executed in buildset '" + buildset.name + "':\n"
-
-            db.buildset.dumpScriptNames(buildset,  sys.stdout.write)
-            
-        #else:
-        #   dlog("Usage: %s list buildsets |" % (progname,))
-        #   dlog("       %s list scripts " % (progname,))
-        #   dlog("       %s list buildset <buildset name/idx>" % (progname,))
-            
-    elif command == 'status':
-
-        pid = None
-        try:
-            pid = open(PID_FILE, 'r').read()
-        except:
-            pass
-
-        if not initdb(False):
-            if pid:
-                dlog("Error: database empty!")
-            else:
-                dlog("No build results available")
-            return
-        
-        builds = STORE.find(db.build).order_by(Desc(db.build.id))
-        if not builds.count():
-            dlog("No builds available")
-            
-        for build in builds:
-            dlog("Buildset '%s'" % build.buildset.name)
-            indent = "   "
-            last_script = None
-
-            bs = STORE.find( db.build_script_status,
-                             db.build_script_status.build_id == build.id,
-                             db.buildset_script.id == db.build_script_status.buildset_script_id).order_by(Asc(db.buildset_script.idx))
-
-            for status in bs:
-                fmt = "%-15s : %-9s (%s of %s)"
-                script = status.buildset_script.script
-                start_time = status.start_time
-                end_time = status.end_time or datetime.utcnow()
-                dur = (not start_time) and "--:--" or utils.sec2str((end_time - start_time).seconds)
-                eta_dur = status.buildset_script.last_duration
-                eta_dur = eta_dur is not None and utils.sec2str(eta_dur) or "--:--"
-
-                # print parent scripts that was not parent for the
-                # last script
-                line, num = utils.render_tree_entry(script, last_script)
-                last_script = script
-
-                if status.end_time:
-                    status_str = (not status.exit_code and "Success" or 
-                                  str(status.exit_code))
-                else:
-                    status_str = status.start_time and "Running" or "  -"
-
-                dlog(line + fmt % ( script.name, status_str, dur, eta_dur ))
-
-            dur, eta_dur = build.getDurations()
-            dlog("-" * 50)
-            dlog("%-33s (%s of %s) " % ("Total duration", 
-                                  utils.sec2str(dur or 0), 
-                                  utils.sec2str(eta_dur or 0) 
-                                  ))
-            break
-        return
-
-        f = open(os.path.expanduser(OPTIONS.work_dir) + "/" + pid, 'r')
-        timings = pickle.load(f)
-
-        buildset = buildsets.buildsets[timings[None][1]]
-        now = datetime.utcnow()
-        dur = now - timings[None][0]
-        print "Buildset '" + buildset.name + "' progress " + str(dur).split('.')[0] + " of " + str(buildset.metadata.get('duration','n/a')).split('.')[0]
-        del timings[None]
-
-        keys = timings.keys()
-        keys.sort()
-
-        for pack in keys:
-            symlink = os.readlink("buildsets/" + buildset.name + "/" + pack)
-            script = buildsets.get_script_by_buildset_link(symlink)
-            dur = script.metadata.get('duration','n/a')
-            cur_dur = timings[pack]
-
-            if type(cur_dur) is datetime:
-                print "  Script '" + script.name + "' " + str(now - cur_dur).split('.')[0] + " of " + str(dur).split('.')[0]
-            else:
-                print "  Script '" + script.name + "' " + str(cur_dur).split('.')[0] + " done"
-            
-    elif command == 'log':
-
-        pid = None
-        try:
-            pid = open(PID_FILE, 'r').read()
-        except:
-            pass
-
-        if not initdb(False):
-            if pid:
-                dlog("Error: database empty!")
-            else:
-                dlog("No build results available")
-            return
-        
-        builds = STORE.find(db.build).order_by(Desc(db.build.id))
-        if not builds.count():
-            dlog("No builds available")
-            
-        for build in builds:
-            dlog("Buildset '%s'" % build.buildset.name)
-            indent = "   "
-            last_script = None
-
-            bs = STORE.find( db.build_script_status,
-                             db.build_script_status.build_id == build.id,
-                             db.buildset_script.id == db.build_script_status.buildset_script_id).order_by(Asc(db.buildset_script.idx))
-
-            idx = 0
-            for status in bs:
-                if idx < OPTIONS.start_index and idx > OPTIONS.stop_index:
-                    idx += 1
-                    continue
-                script = status.buildset_script.script
-                dlog("-" * 70)
-                dlog("Log for '%s'" % script.name)
-                dlog(status.log)
-                dlog("-" * 70)
-                idx += 1
-                
-            break
-
-    elif command == 'release':
-        try:
-            pid = open(PID_FILE, 'r').read()
-        except:
-            # ok
-            pass
-        else:
-            print "Cannot release this buildset since it is still building. Please hang on."
-            sys.exit(1)
-
-        # Make tags in the git/svn repos named from the release version. Possibly
-        # moving a tag. (or commit version info to repos?)
-        
-        
-        # Upload "binaries" to public repos
-        p = OPTIONS.released_debs_path
-        
-    elif command == 'buildinfo':
-        versions_file = "versions"
-
-        if argc > 1:
-            pack = args[1]
-        else:
-            print "Need script name as argument"
-            sys.exit(1)
-            
-        if argc > 2:
-            versions_file = args[2]
-
-
-        if not os.path.isfile(versions_file):
-            print "Cannot open provided versions file '%'" % (versions_file)
-            sys.exit(1)
-
-        # Get the info from versions file
-        import ConfigParser
-        config = ConfigParser.SafeConfigParser()
-        config.read(versions_file)
-
-        if not config.has_section('scm'):
-            print "Need section [scm] in versions config file"
-            sys.exit(1)
-            
-        scm = {}
-        for opt in config.OPTIONS('scm'):
-            scm[opt] = config.get('scm', opt)
-
-        if not config.has_section('scripts'):
-            print "No [scripts] section in versions config file"
-            sys.exit(1)
-
-        if not config.has_option('scripts', pack):
-            print "No script named '%s' in versions config file" % (pack,)
-            sys.exit(1)
-
-        info = { 'repos' : '', 'repos_uri' : '', 'script' : pack, 'revision': 'HEAD', 'branch': ''}
-        pi = config.get('scripts',pack)
-        pi = pi.split(' ')
-
-        if config.has_option('scm', pi[0]):
-            info['repos'] = pi[0]
-            info['repos_uri'] = scm[pi[0]]
-        pi = pi[1].split(':')
-
-        info['branch'] = pi[0]
-        if len(pi) > 1:
-            info['revision'] = pi[1]
-
-        for i in info:
-            print i + " " + info[i]
-
-    elif command == 'import':
-        
-        what = argc > 1 and args[1]
-        path = argc > 2 and args[2]
-        if what != 'scripts' or path == False:
-            print "Need sub command:"
-            print "   scripts <dir> : Will import paths to all scripts "
-            print "                    in 'dir' recursively."
-            sys.exit(1)
-            
-        initdb()
-        script_import.import_scripts(path, STORE)
-
-    elif command == 'server':
-
-        initdb()
-        server.run(OPTIONS.port,  STORE,  SCRIPT_DIR + "/wrenchapp")
-        
-    else:
-        print help_epilog(True)
-
+import lib.config
+from lib import utils
+import lib.commands
 
 def usage():
     """
     Return simple usage string
     """
     return "%prog [options] <command> ..."
+
 
 def help_epilog(include_usage=False):
     """
@@ -408,53 +42,33 @@ def help_epilog(include_usage=False):
     if include_usage:
         out += "commands ( -h for more help ): \n"
 
-    commands = { '1list'    : 'list buildsets or scripts',
-                 '2build'   : 'build a specified buildset',
-                 '3status'  : 'status of running build if any',
-                 '4addscript' : 'add a script to a buildset',
-                 '5rmscript'  : 'remove a script from a buildset',
+    commands = { '01list'    : 'list buildsets or scripts',
+                 '02build'   : 'build a specified buildset',
+                 '03status'  : 'status of running build if any',
+                 '04addscript' : 'add a script to a buildset',
+                 '05rmscript'  : 'remove a script from a buildset',
                  #'6release' : 'release scripts from a given buildset',
-                 '6import' : 'import scripts to be available for buildsets', 
-                 '7server' : 'run as http server'
+                 '06sync' : 'sync scripts to be available for buildsets', 
+                 '07server' : 'run as http server',
+                 '08schedule' : 'schedule a build to be run later',
+                 '09init' : 'initialize current dir for zbuild',
+                 '10re' : 'run all scripts where regex matches path',
+                 '11unittest' : 'short for "re unittest"',
+                 '12functest' : 'short for "re functest"',
+                 '13stage'    : 'short for "re state"',
+                 '14release'  : 'short for "re release"'
                  }
 
     keys = commands.keys()
     keys.sort()
     for i in keys:
-        out += "  " + i[1:].ljust(9) + " : " + commands[i] + "\n"
+        out += "  " + i[2:].ljust(9) + " : " + commands[i] + "\n"
 
     return out
 
-def initdb(allow_create = True):
-    """
-    Open database STORE - creating it if necessary
-    """
-    global STORE
-    sqlitepath = "%s/zbuild.sqlite" % WORKDIR 
-    if not os.path.exists(sqlitepath):
-        if not allow_create:
-            STORE = None
-            return False
 
-        # setup the sqlite database
-        print "No existing sqlite database -> creating"
-        schema = "lib/dbschema.sql"
-        if not os.path.exists(schema):
-            schema = "/usr/share/zbuild/lib/dbschema.sql"
-        import sqlite3
-        print "Using %s" % sqlitepath 
-        conn = sqlite3.connect(sqlitepath)
-        conn.executescript(open(schema, 'r').read())
-        conn.commit()
-        conn.close()
-        #os.system("sqlite3 < '%s'" % schema)
-
-    sdb = create_database("sqlite:%s" % sqlitepath)
-    STORE = Store(sdb)
-    return True
-        
-config.get_config([
-    ('w', 'work-dir', 'path of where to work', '~/zbuild-work'),
+lib.config.get_config([
+    ('w', 'work-dir', 'path of where to work', './.zbuild'),
     ('b', 'build-area', 'path of where to do the builds', '<work-dir>/build-area'),
     ('c', 'config-filename', 'config file location', '<work-dir>/zbuild.conf'),
     ('l', 'log-filename', 'log file location', "<work-dir>/zbuild.log"),
@@ -462,80 +76,90 @@ config.get_config([
     ('C', 'repos-copy', 'path of where to put svn checkout copy', '<work-dir>/repos-local-copy'),
     # ('r', 'repos', 'url to repository', 'git://github.com/jcd/zbuild.git'),
     ('d', 'released-debs-path', 'path where to put released deb scripts', '<work-dir>/deb-repos'),
-    ('s', 'buildset', 'name of buildset to build. An alternative to using an argument.', 'no-buildset'),
+    ('s', 'schedule-at', 'Schedule queued build at give time (HH:MM or YYYY-MM-DD HH:MM)', ''),
     ('n', 'no-clean', 'do not clean existing target but rebuild'),
     ('R', 'revision', 'svn revision to build', "HEAD"),
     ('B', 'branch', 'git branch to build', "master"),
     ('i', 'start-index', "When command is 'build' this is the index of the buildset to start at", 0),
     ('I', 'stop-index', "When command is 'build' this is the index of the buildset to stop at", 10000000),
     #('b', 'enable-release', 'this build will release scripts'),
-    ('P', 'scripts', 'setup path for buildsets and scripts available', './scripts:<work-dir>/scripts'), 
-    ('p', 'port', 'Listen on port', 8765)
+    ('p', 'port', 'Listen on port', 8765),
+    ('P', 'pid-file', 'Path to pid file', '<work-dir>/zbuild.pid')
     ], epilog=help_epilog(), usage=usage())
 
-PID_FILE = '/tmp/zbuild.pid'
-SCRIPT_DIR = None
-WORK_DIR = None
+
+def handle_command_line(args):
+    """
+    Parse the command from command and perform
+    """
+    if len(args) >= 1:
+        command = args[0].lower()
+    else:
+        print help_epilog(True)
+        return
+
+    if command in ('unittest', 'functest', 'stage', 'release'):
+        args[0] = args[0]
+        args.insert(0,'re')
+        command = 're'
+        
+    # rename short names to full names
+    command = {
+        'enq' : 'enqueue',
+        'list' : 'listing',
+        'ls' : 'listing',
+        'rel' : 'release',
+        'st' : 'status',
+        'rm' : 'remove'
+        }.get(command, command)
+    
+    argc = len(args)
+    commands = [ 'enqueue', 'schedule', 'add', 'remove', 'listing', 'status',
+                 'release', 'sync', 'server', 'build', 're', 'init' ]
+
+
+    if command not in commands:
+        print "Unknown command '%s'" % command
+        print help_epilog(True)
+        return
+
+    getattr(lib.commands, command)(args)
+    
 
 if __name__ == "__main__":
 
-    if OPTIONS is None:
-        print help_epilog(True)
-        sys.exit(0)
+    work_dir = os.path.abspath(os.path.expanduser(OPTIONS.work_dir))
 
-    WORKDIR = os.path.expanduser(OPTIONS.work_dir)
-    if not os.path.isdir(WORKDIR):
-        print "Creating work dir '%s'" % WORKDIR
-        utils.mkdirp(WORKDIR)
+    if not os.path.exists(work_dir + os.path.sep + "zbuild.sqlite") and ARGS[0] != 'init':
+        print("This is not a zbuild dir. Use 'zbuild init'")
+        sys.exit(1)
+    
+    OPTIONS.work_dir = work_dir
 
     for i in ['config_filename', 'log_filename', 'repos_copy',
-              'released_debs_path', 'scripts', 'build_area']:
+              'released_debs_path', 'build_area', 'pid_file']:
         dd = getattr(OPTIONS, i)
-        dd = os.path.expanduser(dd.replace('<work-dir>',WORKDIR))
+        dd = os.path.expanduser(dd.replace('<work-dir>',work_dir))
         setattr(OPTIONS, i, dd)
 
     # Change to script dir
-    SCRIPT_DIR = os.path.abspath(sys.path[0])
-    OPTIONS.zbuild_install_dir = SCRIPT_DIR
-    BUILDDIR = OPTIONS.build_area
-    if not os.path.isdir(BUILDDIR):
-        print "Creating build dir '%s'" % BUILDDIR
-        utils.mkdirp(BUILDDIR)
-
-    RELEASEDIR = os.path.expanduser(OPTIONS.released_debs_path)
-    # Setup svn home env variable
-    # os.environ['ZBUILD_GIT'] = os.path.expanduser(OPTIONS.repos)
+    OPTIONS.zbuild_install_dir = os.path.abspath(sys.path[0])
+    OPTIONS.released_debs_path = os.path.expanduser(OPTIONS.released_debs_path)
+    OPTIONS.pwd = os.environ['PWD']
+    
+    os.environ['ZBUILD_EXECUTABLE'] = OPTIONS.zbuild_install_dir
     os.environ['ZBUILD_REPOS_LOCAL_COPY'] = os.path.expanduser(OPTIONS.repos_copy)
-    os.environ['ZBUILD_WORKDIR'] = WORKDIR
-    os.environ['ZBUILD_BUILDDIR'] = BUILDDIR
-    os.environ['ZBUILD_RELEASE_DIR'] = RELEASEDIR
-    os.environ['ZBUILD_REV'] = os.path.expanduser(OPTIONS.revision)
-    os.environ['ZBUILD_BRANCH'] = os.path.expanduser(OPTIONS.branch)
+    os.environ['ZBUILD_WORKDIR'] = work_dir
+    os.environ['ZBUILD_PWD'] = OPTIONS.pwd
+    os.environ['ZBUILD_BUILDDIR'] = OPTIONS.build_area
+    os.environ['ZBUILD_RELEASE_DIR'] = OPTIONS.released_debs_path
+    os.environ['ZBUILD_REV'] = OPTIONS.revision
+    os.environ['ZBUILD_BRANCH'] = OPTIONS.branch
     os.environ['ZBUILD_ENVIRONMENT'] = OPTIONS.environment
 
-    if not os.path.isdir(RELEASEDIR):
-        print "Creating release dir '%s'" % RELEASEDIR
-        utils.mkdirp(RELEASEDIR)
-
-    # os.environ['ZBUILD_NOCLEAN_ENABLED'] = "1" # always enabled for now
     if OPTIONS.no_clean:
         os.environ['ZBUILD_NOCLEAN_ENABLED'] = OPTIONS.no_clean and '1' or ''
 
-    # os.environ['ZBUILD_RELEASING'] = OPTIONS.enable_release and '1' or ''
     os.environ['ZBUILD_STARTDIR'] = os.path.abspath(os.curdir)
 
-    #import pprint
-    #dlog(str(pprint.pformat(os.environ)))
-
-    progname = sys.argv[0]
-
-    OPTIONS.scripts = os.path.expanduser(OPTIONS.scripts).split(':')
-    #if not buildsets.init_buildsets(sys.stdout.write, OPTIONS.scripts):
-    #    sys.exit(1)
-    #OPTIONS.scripts = buildsets.config_path
-    
-    if len(ARGS) >= 1:
-        command = ARGS[0].lower()
-        parse_commands(command, ARGS)
-    else:
-        print help_epilog(True)
+    handle_command_line(ARGS)

@@ -2,7 +2,11 @@
 #
 # Unit testing
 #
-cd 
+# export PYTHONPATH=`pwd`:$PYTHONPATH
+
+test/layout_unit.py
+
+exit 0
 
 # 1, testing here in my worktree
 #      unit testing
@@ -12,9 +16,6 @@ cd
 #      booting a system from packs and test functions
 # 3, testing prod
 #      test safe functions
-
-
-
 
 1 build + unit test work tree
 2 build + func test work tree
@@ -26,3 +27,5 @@ cd
 2: zbuild functest
 3: zbuild stage -h host.dk
 4: zbuild release
+
+

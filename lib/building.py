@@ -9,8 +9,14 @@ Methods for executing the builds
 from utils import dlog, mkdirp, log_stdout
 from datetime import datetime, timedelta
 import select
-import popen2
 import os.path
+
+use_popen2 = True
+try:
+    from subprocess import Popen, PIPE
+    use_popen2 = False
+except:
+    import popen2
 
 from storm.locals import *
 import db
@@ -104,11 +110,24 @@ def run_script(logger, path):
 
     init_bash = OPTIONS.zbuild_install_dir + "/lib/functions.sh"
 
-    inst = popen2.Popen3("/bin/bash %s '%s'" % (init_bash, path), True)
-    out, _in, err = inst.fromchild, inst.tochild, inst.childerr
-    
+    # As a convenience set the pythonpath to include the workdir
+    pp = os.environ.get('PYTHONPATH', None)
+    os.environ['PYTHONPATH'] = OPTIONS.pwd + ( pp and (":" + pp) or '') 
+
+    if use_popen2:
+        inst = popen2.Popen3("/bin/bash %s '%s'" % (init_bash, path), True)
+        out, _in, err = inst.fromchild, inst.tochild, inst.childerr
+    else:
+        inst = Popen(["/bin/bash", init_bash, path],  
+                  stdin=PIPE, stdout=PIPE, stderr=PIPE, close_fds=True)
+        # TODO: use communicate instead
+        out, _in, err = inst.stdout, inst.stdin, inst.stderr
+        
     # Iterate until script is done or should be killed
     dot_last = True
+
+    global first_line
+    first_line = True
 
     def do_logging(dot_last):
         """
@@ -116,29 +135,34 @@ def run_script(logger, path):
         """
         rlist, wlist, xlist = select.select([out,err], [], [], CHECK_INTERVALS)
 
+        global first_line
+
         # append output to log buffers
         if len(rlist):
-            if dot_last:
-                logger("\n")
+            #if dot_last:
+            #    logger("\n")
+            msg = None
+            pre = ' '
             if out in rlist:
                 msg = os.read(out.fileno(), 1000)
-                if msg:
-                    logger(msg)
             if err in rlist:
                 msg = os.read(err.fileno(), 1000)
-                #logger(msg)
-                if msg:
-                    msgs = msg.split('\n')
-                    msgs.reverse()
-                    if len(msgs) == 1:
-                        msg = msg
-                    else:
-                        msg = reduce(lambda a, b: b + "\nSTDERR : %s" % a, msgs)
-                    logger(msg)
+                pre = 'e'
+            if msg is not None:
+                msgs = msg.split('\n')
+                msgs.reverse()
+                if len(msgs) == 1:
+                    msg = msg
+                else:
+                    msg = reduce(lambda a, b: b +  ("\n%s %s" % (pre,a)), msgs)
+                    #msg = reduce(lambda a, b: b + (a != '' and ("\n%s %s" % (pre,a)) or ''), msgs)
+                if msg is not None:
+                    logger((first_line and ("%s " % pre) or '') + msg)
 
             dot_last = False
-
-        if not (len(xlist) or len(xlist) or len(wlist)) and dot_last:
+            first_line = False
+            
+        if not (len(xlist) or len(rlist) or len(wlist)) and dot_last:
             logger(".")
             dot_last = True
 

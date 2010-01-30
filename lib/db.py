@@ -3,12 +3,43 @@ from layout import table_layout,  counter_length
 import sys
 from datetime import datetime, timedelta
 import utils
+import os.path
+import sqlite3
+
+def initdb(allow_create = False):
+    """
+    Open database STORE - creating it if necessary
+    """
+    sqlitepath = "%s/zbuild.sqlite" % OPTIONS.work_dir
+    if not os.path.exists(sqlitepath):
+        if not allow_create:
+            return None
+
+        # setup the sqlite database
+        # print "No existing sqlite database -> creating"
+        schema = "lib/dbschema.sql"
+        if not os.path.exists(schema):
+            schema = OPTIONS.zbuild_install_dir + "/lib/dbschema.sql"
+            if not os.path.exists(schema):
+                schema = "/usr/share/zbuild/lib/dbschema.sql"
+
+        # print "Using %s" % sqlitepath 
+        conn = sqlite3.connect(sqlitepath)
+        conn.executescript(open(schema, 'r').read())
+        conn.commit()
+        conn.close()
+        #os.system("sqlite3 < '%s'" % schema)
+
+    sdb = create_database("sqlite:%s" % sqlitepath)
+    return Store(sdb)
+
 
 class buildset(Storm):
     __storm_table__ = 'buildset'
     id = Int(primary=True)
     name = Unicode()
-
+    flags = Int()
+    
     @classmethod
     def dumpNames(cls, store,  os):
         """
@@ -109,11 +140,11 @@ class buildset(Storm):
         return None
     
     @classmethod
-    def getByName(cls,  store, name):
+    def getByName(cls, store, name):
         return store.find(cls,  name == cls.name).one()
     
     @classmethod
-    def getByIdent(cls,  store, ident):
+    def getByIdent(cls, store, ident):
         try:
             s = cls.getByIndex(store, int(ident))
             if s:
@@ -176,11 +207,12 @@ class buildset(Storm):
             elif i.idx > idx:
                 i.idx -= 1
         store.commit()
-            
+
 class script(Storm):
     __storm_table__ = 'script'
     id = Int(primary=True)
     name = Unicode()
+    repos = Unicode()
     path = Unicode()
     parent_id = Int()
     is_parent = Int()
@@ -192,7 +224,11 @@ class script(Storm):
         """
         return self.parent and [self.parent, self] or [self]
     
+    def getCanonicalName(self):
+        return self.parent and (self.parent.getCanonicalName() + "/" + self.name) or self.name
 
+        return '/'.join(self.getPath())
+    
     def getCommonPath(self, other_script):
         """
         Return the part the path (see getPath) that self and

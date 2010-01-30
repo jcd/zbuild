@@ -3,23 +3,38 @@
 # Run all available tests
 #
 
-SCRIPTPATH=`readlink -f ../zbuild`
-export PYTHONPATH=$PYTHONPATH:`dirname $SCRIPTPATH`
+# make sure to include the 'to-be-tested' zbuild dir
+# before all other paths
+TEST_SCRIPTPATH=`readlink -f $0`
+export TEST_SCRIPTDIR=`dirname $TEST_SCRIPTPATH`
+ZBUILD_DIR=`dirname $(dirname $TEST_SCRIPTPATH)`
+export PYTHONPATH=$ZBUILD_DIR:$PYTHONPATH
 
-rm -rf .zbuild
+# The zbuild exec to test with
+ZEB=$ZBUILD_DIR/zbuild
+
+echo "Testing zbuild in dir $ZBUILD_DIR"
+
+WD=/tmp/zbuild-functest
+rm -rf $WD
+mkdir $WD
+
+pushd $WD
 
 ARGS=""
 
+$ZEB $ARGS init 
+
 # Import the test scripts
-../zbuild $ARGS sync ./scripts/
+$ZEB $ARGS sync $ZBUILD_DIR/test/scripts/
 if [ "$?" != "0" ]; then echo "ERROR: could not sync scripts"; fi
 
-../zbuild $ARGS list
+$ZEB $ARGS list
 if [ "$?" != "0" ]; then echo "ERROR: could list sync scripts"; fi
 
 # Setup buildsets
 addbscript() {
-    ../zbuild $ARGS add $*
+    $ZEB $ARGS add $*
     if [ "$?" != "0" ]; then echo "ERROR: could add script '$*'"; fi
 }
 
@@ -29,21 +44,32 @@ addbscript testbuildset0 2
 addbscript 0 6
 addbscript 0 7
 
-../zbuild $ARGS list 0
+$ZEB $ARGS list 0
 if [ "$?" != "0" ]; then echo "ERROR: could list sync scripts"; fi
 
-../zbuild $ARGS build 0
-if [ "$?" != "0" ]; then echo "ERROR: could build 0"; fi
+$ZEB $ARGS build 0
+if [ "$?" != "0" ]; then echo "ERROR: could not build 0"; fi
+
+exit 0
 
 addbscript testbuildset1 repos1
 
-../zbuild $ARGS build 1
-if [ "$?" != "0" ]; then echo "ERROR: could build 0"; fi
+$ZEB $ARGS build 1
+if [ "$?" != "0" ]; then echo "ERROR: could not build 1"; fi
 
-#../zbuild $ARGS schedule 0 '23:58'
+
+$ZEB $ARGS sync localhost:$ZBUILD_DIR#test/scripts/
+if [ "$?" != "0" ]; then echo "ERROR: could not sync scripts"; fi
+
+addbscript testbuildset2 18
+
+$ZEB $ARGS build 2
+if [ "$?" != "0" ]; then echo "ERROR: could not build 2"; fi
+
+#$ZEB $ARGS schedule 0 '23:58'
 #if [ "$?" != "0" ]; then echo "ERROR: could build 0"; fi
 
-#../zbuild $ARGS server
+#$ZEB $ARGS server
 
 # addbscript testbuildset1 success.sh
 # addbscript testbuildset1 failure.sh
@@ -51,7 +77,7 @@ if [ "$?" != "0" ]; then echo "ERROR: could build 0"; fi
 # addbscript 0 subscript2/success.sh
 # addbscript 0 subscript2/failure.sh
 
-rm -rf $T
+# rm -rf $T
 
 exit 0
 

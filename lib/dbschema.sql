@@ -10,7 +10,8 @@ BEGIN TRANSACTION;
 --
 CREATE TABLE buildset (
        id INTEGER PRIMARY KEY ASC AUTOINCREMENT,
-       name TEXT UNIQUE NOT NULL
+       name TEXT UNIQUE NOT NULL,
+       flags INT NOT NULL DEFAULT 0
 );
 
 --
@@ -19,6 +20,7 @@ CREATE TABLE buildset (
 CREATE TABLE script (
        id INTEGER PRIMARY KEY ASC AUTOINCREMENT,
        name TEXT NOT NULL,
+       repos TEXT,
        path TEXT UNIQUE NOT NULL,
        is_parent INTEGER DEFAULT 0,
        parent_id REFERENCES script (id)

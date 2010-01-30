@@ -81,8 +81,8 @@ def sec2str(secs):
 def render_tree_entry(cur, last = None, num = None, num_len = 2):
     indent = "   "
     common, path = cur.getPathChange(last)
-    idx = len(common)
-    res = ""
+    idx = len(common)-1
+    res = [""]
     
     for path_entry in path:
         
@@ -90,14 +90,15 @@ def render_tree_entry(cur, last = None, num = None, num_len = 2):
         
         if path_entry != cur:
             if num is not None:
-                res += str(num).rjust(num_len,'0') + " "
+                res[-1] += str(num).rjust(num_len,'0') + " "
                 num += 1    
-            res += (indent * idx) + path_entry.name + "\n"
+            res[-1] += (indent * idx) + path_entry.name
+            res.append("")
             continue
         
         if num is not None:
-            res += str(num).rjust(num_len,'0') + " "
-        res += (indent * idx)
+            res[-1] += str(num).rjust(num_len,'0') + " "
+        res[-1] += (indent * idx)
 
         break
     return res, num

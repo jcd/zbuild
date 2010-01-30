@@ -2,7 +2,11 @@
 #
 # Unit testing
 #
-cd 
+
+test/run_all_tests.sh
+
+exit 0
+
 
 # 1, testing here in my worktree
 #      unit testing
