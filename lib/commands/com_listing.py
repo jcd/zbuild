@@ -39,6 +39,7 @@ def _listing_list(store, sub):
             print "\nAvailable buildsets:\n"
 
         db.buildset.dumpNames(store,  sys.stdout.write)
+        print "\nUse 'zbuild build <buildset name>' to run a build"
 
 def _listing_buildset(store, buildset_ident):
 

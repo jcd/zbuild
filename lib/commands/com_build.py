@@ -21,7 +21,6 @@ def build(args):
     if not buildset:
         print u"Error: No buildset called '%s'" % unicode(args[1])
         # Clean up for next run
-        os.remove(OPTIONS.pid_file)
         return
 
     print u'Using buildset "%s"' % buildset.name

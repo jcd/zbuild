@@ -1,0 +1,13 @@
+#!/bin/bash
+. .zbuild/scripts/functest/common.sh
+pushd $WD
+
+addbscript testbuildset0 0
+addbscript testbuildset0 1
+addbscript testbuildset0 2
+addbscript 0 6
+addbscript 0 7
+
+$ZEB $ARGS list 0
+exit $?
+

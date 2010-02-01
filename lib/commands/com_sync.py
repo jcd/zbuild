@@ -103,10 +103,18 @@ def sync_scripts(path, store):
     pathlist = pathlist.split('\n')
     idx = 0
 
+    def is_exec(pp):
+        st = os.stat(pp)
+        return ( ( (st.st_mode & os.path.stat.S_IXUSR) and st.st_uid == os.getuid()) or
+                 ( (st.st_mode & os.path.stat.S_IXGRP) and st.st_uid in os.getgroups()) or
+                 ( st.st_mode & os.path.stat.S_IXOTH and st.st_uid != os.getuid() ) )
+
     base_path_len = len(pathlist[0])
     if path[-1] != '/':
         base_path_len += 1
 
+    existing_ids = set()
+    
     for full_path in pathlist:
 
         fname = full_path[base_path_len:]
@@ -131,7 +139,18 @@ def sync_scripts(path, store):
 
         if p:
             scripts[tuple(script_path)] = p.id
-            print "Existing %s" % str('/'.join(script_path))
+            print "Existing %s" % str('/'.join(script_path)),
+            if False and not is_exec(full_path):
+                print " -> removing because not executable anymore"
+                for bss in p.buildset_scripts:
+                    store.remote(bss)
+                store.remove(p)
+                store.commit()
+            else:
+                existing_ids.add(p.id)
+            continue
+
+        if not is_exec(full_path):
             continue
 
         p = db.script()
@@ -145,10 +164,15 @@ def sync_scripts(path, store):
         store.add(p)
         store.flush()
 
+        existing_ids.add(p.id)
+
         if is_parent:
             # print "is parent %i" % p.id
             scripts[tuple(script_path)] = p.id
             
-        print "Adding %s : % s" % (p.id, fname)
+        print "Adding %s : % s" % (str(p.id).rjust(2), fname)
 
+    # Remove scripts not present anymore
+    # TODO: hmmmm
+    
     store.commit()

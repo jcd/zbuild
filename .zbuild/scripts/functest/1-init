@@ -1,11 +1,26 @@
 #!/bin/bash
 #
-# Unit testing
+# Functional testing
 #
 
-test/run_all_tests.sh
+. .zbuild/scripts/functest/common.sh
+
+echo "Testing zbuild in dir $ZBUILD_DIR"
+
+rm -rf $WD
+mkdir $WD
+
+pushd $WD
+
+$ZEB $ARGS init 
+
+# Import the test scripts
+$ZEB $ARGS sync $ZBUILD_DIR/test/scripts/
+if [ "$?" != "0" ]; then echo "ERROR: could not sync scripts"; fi
 
 exit 0
+
+test/run_all_tests.sh
 
 
 # 1, testing here in my worktree

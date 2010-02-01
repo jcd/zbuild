@@ -15,4 +15,17 @@
 # ZBUILD_ENVIRONMENT  : zbuild mode - development, staging, demo or release
 
 echo "This test is successful because the exit status is 0"
+
+# Special rails rake tests - just remove this if your project is not
+# rails based.
+if [ -f 'Rakefile' ]; then
+
+    rake test:units
+    if [ "$?" != 0 ]; then exit 1 ; fi
+
+    rake test:functionals
+    if [ "$?" != 0 ]; then exit 1 ; fi
+
+fi
+
 exit 0

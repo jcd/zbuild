@@ -35,6 +35,8 @@ def help_epilog(include_usage=False):
     if include_usage:
         out += usage().replace('%prog', os.path.basename(sys.argv[0])) + "\n"
     out += "\n"
+    out += "'zbuild init' to make this a zbuild dir\n"
+    out += "\n"
     out += "A buildset consists of a sequence of scripts that will be\n"
     out += "executed when the buildset is build\n"
     out += "\n"
@@ -42,16 +44,16 @@ def help_epilog(include_usage=False):
     if include_usage:
         out += "commands ( -h for more help ): \n"
 
-    commands = { '01list'    : 'list buildsets or scripts',
-                 '02build'   : 'build a specified buildset',
-                 '03status'  : 'status of running build if any',
-                 '04addscript' : 'add a script to a buildset',
-                 '05rmscript'  : 'remove a script from a buildset',
+    commands = { '01init' : 'initialize current dir for zbuild',
+                 '02list'    : 'list buildsets or scripts',
+                 '03build'   : 'build a specified buildset',
+                 '04status'  : 'status of running build if any',
+                 '05addscript' : 'add a script to a buildset',
+                 '06rmscript'  : 'remove a script from a buildset',
                  #'6release' : 'release scripts from a given buildset',
-                 '06sync' : 'sync scripts to be available for buildsets', 
-                 '07server' : 'run as http server',
-                 '08schedule' : 'schedule a build to be run later',
-                 '09init' : 'initialize current dir for zbuild',
+                 '07sync' : 'sync scripts to be available for buildsets', 
+                 '08server' : 'run as http server',
+                 '09schedule' : 'schedule a build to be run later',
                  '10re' : 'run all scripts where regex matches path',
                  '11unittest' : 'short for "re unittest"',
                  '12functest' : 'short for "re functest"',
@@ -119,7 +121,8 @@ def handle_command_line(args):
 
 
     if command not in commands:
-        print "Unknown command '%s'" % command
+        if command != 'help':
+            print "Unknown command '%s'" % command
         print help_epilog(True)
         return
 
@@ -130,8 +133,12 @@ if __name__ == "__main__":
 
     work_dir = os.path.abspath(os.path.expanduser(OPTIONS.work_dir))
 
-    if not os.path.exists(work_dir + os.path.sep + "zbuild.sqlite") and ARGS[0] != 'init':
-        print("This is not a zbuild dir. Use 'zbuild init'")
+    if not len(ARGS):
+        print("Use 'zbuild help' for usage")
+        sys.exit(1)
+        
+    if not os.path.exists(work_dir + os.path.sep + "zbuild.sqlite") and (len(ARGS) != 0 and ARGS[0] not in ('init', 'help')):
+        print("This is not a zbuild dir. Use 'zbuild init' or 'zbuild help'")
         sys.exit(1)
     
     OPTIONS.work_dir = work_dir

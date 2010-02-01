@@ -1,0 +1,7 @@
+#!/bin/bash
+. .zbuild/scripts/functest/common.sh
+pushd $WD
+
+$ZEB $ARGS build 0
+exit $?
+

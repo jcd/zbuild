@@ -456,3 +456,5 @@ build.build_script_statuses = ReferenceSet(build.id, build_script_status.build_i
 # build.build_scripts = ReferenceSet(build.id, build_script.build_id)
 build_script_status.build = Reference(build_script_status.build_id, build.id)
 build_script_status.buildset_script = Reference(build_script_status.buildset_script_id, buildset_script.id)
+
+script.buildset_scripts = ReferenceSet(script.id, buildset_script.script_id)
