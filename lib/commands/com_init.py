@@ -25,7 +25,7 @@ def init(args):
         # Now re-run the zbuild init command with any args
         repos_toks = repos.split('/')
         repos_name = repos_toks[-1] or repos_toks[-2]
-        os.chdir(repos_name.endswith(".git") and repos_name[-4:] or repos_name)
+        os.chdir(repos_name.endswith(".git") and repos_name[:-4] or repos_name)
 
         (status, output) = commands.getstatusoutput("%s/zbuild init" % OPTIONS.zbuild_install_dir)
         print output
