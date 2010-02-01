@@ -251,7 +251,8 @@ echo "$FI" > $TMPFILEABS
 	echo ". $JAILCMDFILE" >> $TMPFILEABS
     fi 
     #screen -R -D sudo chroot $JAILHOME /bin/su -c "cd '$PWD'; /bin/bash --init-file $TMPFILE -i" $USER
-    sudo chroot $JAILHOME /bin/su -c "cd '$PWD'; /bin/bash --init-file $TMPFILE -i" $USER
+    sudo chroot $JAILHOME /bin/su -c "cd '$PWD'; /bin/bash --init-file $TMPFILE -i;" $USER
+    return $?
 }
 
 setup_home() {
@@ -317,8 +318,7 @@ fi
 
 setup
 go_to_jail
-
-exit 0
+exit $?
 
 if [ -z "$FORCE" ]; then
     echo "Should I teardown jail in $JAILHOME (y/N)?"
